@@ -11,7 +11,7 @@ async def test_airtable_connection():
     print("=" * 50)
     
     api_key = os.getenv("AIRTABLE_API_KEY")
-    base_id = os.getenv("AIRTABLE_BASE_ID", "appqsjdQHyqZ5OMrx")
+    base_id = os.getenv("AIRTABLE_BASE_ID")
     
     if not api_key:
         print("❌ AIRTABLE_API_KEY not found in environment variables")

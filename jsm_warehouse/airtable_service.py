@@ -6,7 +6,7 @@ from pyairtable import Api, Table
 
 # Airtable Configuration
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID", "appqsjdQHyqZ5OMrx")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = "Warehouses"
 
 # Initialize Airtable API
