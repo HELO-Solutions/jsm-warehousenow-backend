@@ -4,22 +4,17 @@ from typing import List, Dict, Any
 from fastapi import HTTPException
 from pyairtable import Api, Table
 
-# Airtable Configuration
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = "Warehouses"
 
-# Initialize Airtable API
 api = Api(AIRTABLE_API_KEY)
 table = api.table(AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME)
 
 async def fetch_warehouses_from_airtable() -> List[Dict[str, Any]]:
     """Fetch warehouses from Airtable"""
     try:
-        # Get all records from the Warehouses table
         records = table.all()
-        
-        # Transform Airtable records to match your expected format
         warehouses = []
         for record in records:
             warehouse = {
