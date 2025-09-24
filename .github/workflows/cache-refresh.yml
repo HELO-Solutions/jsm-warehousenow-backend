@@ -2,7 +2,7 @@ name: Cache Refresh
 
 on:
   schedule:
-    # Run every 30 minutes
+    # Run every 1 minute
     - cron: '*/1 * * * *'
   # Allow manual trigger
   workflow_dispatch:
@@ -50,9 +50,8 @@ jobs:
       if: success()
       run: |
         echo "🎉 Cache refresh completed successfully at $(date)"
-      
+        
     - name: Notify on Failure
       if: failure()
       run: |
         echo "💥 Cache refresh failed at $(date)"
-
