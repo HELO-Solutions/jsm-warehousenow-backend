@@ -99,37 +99,35 @@ async def get_cache_status_endpoint():
         raise HTTPException(status_code=500, detail=f"Failed to get cache status: {str(e)}")
 
 
-@warehouse_router.post("/webhook/airtable")
+@warehouse_router.post("/webhook")
 async def airtable_webhook(request: dict):
     """Handle Airtable webhook notifications for real-time cache invalidation."""
     try:
+        print(f"📨 Webhook received: {request}")
+        
         # Optional: Add webhook authentication
         # webhook_secret = request.headers.get("X-Airtable-Webhook-Secret")
         # if webhook_secret != os.getenv("AIRTABLE_WEBHOOK_SECRET"):
         #     raise HTTPException(status_code=401, detail="Invalid webhook secret")
         
-        # Airtable webhook payload structure
-        webhook_data = request.get("webhook", {})
-        base_id = webhook_data.get("base", {}).get("id")
+        # Process the warehouse data from Airtable
+        warehouse_data = request
         
-        # Only process webhooks for our warehouse base
-        if base_id == os.getenv("BASE_ID"):
-            # Clear cache when Airtable data changes
-            await invalidate_warehouse_cache()
-            
-            return ResponseModel(
-                status="success", 
-                data={
-                    "message": "Cache invalidated due to Airtable changes",
-                    "base_id": base_id,
-                    "timestamp": time.time()
-                }
-            )
-        else:
-            return ResponseModel(
-                status="ignored", 
-                data={"message": "Webhook ignored - different base ID"}
-            )
+        # Log the received data
+        print(f"🏢 Warehouse data received: {warehouse_data.get('Warehouse Name', 'Unknown')}")
+        
+        # Clear cache when Airtable data changes
+        await invalidate_warehouse_cache()
+        
+        return ResponseModel(
+            status="success", 
+            data={
+                "message": "Webhook processed successfully",
+                "warehouse_name": warehouse_data.get("Warehouse Name"),
+                "timestamp": time.time()
+            }
+        )
             
     except Exception as e:
+        print(f"❌ Webhook error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
