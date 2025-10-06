@@ -61,6 +61,7 @@ class WarehouseFields(BaseModel):
 
 class WarehouseData(BaseModel):
     id: str
+    warehouse_id: Optional[str] = None
     fields: WarehouseFields
 
 class FilterWarehouseData(BaseModel):

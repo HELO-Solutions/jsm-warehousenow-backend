@@ -336,6 +336,7 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
             wh_copy["tier_rank"] = _tier_rank(wh["fields"].get("Tier"))
             wh_copy["tags"] = find_missing_fields(wh["fields"])
             wh_copy["has_missed_fields"] = bool(wh_copy["tags"])
+            wh_copy["warehouse_id"] = wh["fields"]["WarehouseID"]
             
             nearby.append(wh_copy)
     
