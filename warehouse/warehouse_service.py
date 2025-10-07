@@ -77,12 +77,16 @@ class MemoryCache:
             total_entries = len(self._cache)
             expired_entries = sum(1 for entry in self._cache.values() if self._is_expired(entry))
             warehouse_entries = sum(1 for key in self._cache.keys() if key.startswith('warehouses:'))
+            driving_entries = sum(1 for key in self._cache.keys() if key.startswith('driving:'))
+            coord_entries = sum(1 for key in self._cache.keys() if key.startswith('coords:'))
             
             return {
                 'total_entries': total_entries,
                 'expired_entries': expired_entries,
                 'active_entries': total_entries - expired_entries,
                 'warehouse_entries': warehouse_entries,
+                'driving_entries': driving_entries,
+                'coordinate_entries': coord_entries,
                 'last_airtable_check': self._last_airtable_check,
                 'cache_age_hours': (current_time - self._last_airtable_check) / 3600
             }
@@ -108,8 +112,9 @@ async def get_coordinates_cached(zip_code: str) -> Optional[Tuple[float, float]]
     return coords
 
 async def get_driving_data_cached(origin_coords: Tuple[float, float], dest_coords: Tuple[float, float], origin_zip: str, dest_zip: str) -> Optional[Dict[str, float]]:
-    """Get driving data with caching."""
-    cache_key = f"driving:{origin_zip}:{dest_zip}"
+    """Get driving data with bidirectional caching."""
+    # Create consistent cache key regardless of direction
+    cache_key = get_driving_cache_key(origin_zip, dest_zip)
     cached = _cache.get(cache_key)
     if cached:
         return cached
@@ -118,6 +123,11 @@ async def get_driving_data_cached(origin_coords: Tuple[float, float], dest_coord
     if result:
         _cache.set(cache_key, result, ttl=86400)  # 24 hours
     return result
+
+def get_driving_cache_key(origin_zip: str, dest_zip: str) -> str:
+    """Generate consistent cache key for bidirectional routes."""
+    sorted_zips = sorted([origin_zip, dest_zip])
+    return f"driving:{sorted_zips[0]}:{sorted_zips[1]}"
 
 async def batch_get_coordinates(zip_codes: List[str], max_concurrent: int = 10) -> Dict[str, Optional[Tuple[float, float]]]:
     """Get coordinates for multiple ZIP codes concurrently."""

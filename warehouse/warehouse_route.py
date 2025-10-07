@@ -17,7 +17,14 @@ warehouse_router = APIRouter()
 async def warehouses():
     try:
         data = await fetch_warehouses_from_airtable()
-        return ResponseModel(status="success", data=data)
+        total_records = len(data)
+        return ResponseModel(
+            status="success", 
+            data={
+                "warehouses": data,
+                "total_records": total_records
+            }
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
