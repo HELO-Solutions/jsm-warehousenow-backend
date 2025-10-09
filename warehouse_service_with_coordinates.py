@@ -1,5 +1,9 @@
+"""
+Updated warehouse service that uses latitude and longitude from Airtable.
+This eliminates the need for coordinate API calls, saving significant costs.
+"""
+
 import os
-import re
 import time
 import asyncio
 from typing import List, Optional, Dict, Any, Tuple
@@ -9,7 +13,7 @@ from pydantic import BaseModel
 import httpx
 import copy
 
-from services.geolocation.geolocation_service import get_coordinates_mapbox, get_coordinates_google, get_driving_distance_and_time_google, get_coordinates_google_async
+from services.geolocation.geolocation_service import get_coordinates_mapbox, get_driving_distance_and_time_google, haversine
 from warehouse.models import FilterWarehouseData, OrderData, WarehouseData
 from services.gemini_services.ai_analysis import GENERAL_AI_ANALYSIS, analyze_warehouse_with_gemini
 from dotenv import load_dotenv
@@ -19,7 +23,6 @@ AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 BASE_ID = os.getenv("BASE_ID")
 WAREHOUSE_TABLE_NAME = "Warehouses" 
 ODER_TABLE_NAME = "Requests"
-
 
 # In-memory cache for performance optimization
 class MemoryCache:
@@ -58,7 +61,7 @@ class MemoryCache:
     def clear_warehouse_cache(self) -> None:
         """Clear all warehouse-related cache entries."""
         with self._lock:
-            keys_to_delete = [key for key in self._cache.keys() if key.startswith(('warehouses:', 'coords:', 'driving:'))]
+            keys_to_delete = [key for key in self._cache.keys() if key.startswith(('warehouses:', 'driving:'))]
             for key in keys_to_delete:
                 del self._cache[key]
     
@@ -78,7 +81,6 @@ class MemoryCache:
             expired_entries = sum(1 for entry in self._cache.values() if self._is_expired(entry))
             warehouse_entries = sum(1 for key in self._cache.keys() if key.startswith('warehouses:'))
             driving_entries = sum(1 for key in self._cache.keys() if key.startswith('driving:'))
-            coord_entries = sum(1 for key in self._cache.keys() if key.startswith('coords:'))
             
             return {
                 'total_entries': total_entries,
@@ -86,7 +88,6 @@ class MemoryCache:
                 'active_entries': total_entries - expired_entries,
                 'warehouse_entries': warehouse_entries,
                 'driving_entries': driving_entries,
-                'coordinate_entries': coord_entries,
                 'last_airtable_check': self._last_airtable_check,
                 'cache_age_hours': (current_time - self._last_airtable_check) / 3600
             }
@@ -97,19 +98,6 @@ _cache = MemoryCache()
 class LocationRequest(BaseModel):
     zip_code: str
     radius_miles: float = 50  # default to 50 miles
-
-# Optimized async functions with caching
-async def get_coordinates_cached(zip_code: str) -> Optional[Tuple[float, float]]:
-    """Get coordinates with caching."""
-    cache_key = f"coords:{zip_code}"
-    cached = _cache.get(cache_key)
-    if cached:
-        return cached
-    
-    coords = await get_coordinates_google_async(zip_code)
-    if coords:
-        _cache.set(cache_key, coords, ttl=86400)  # 24 hours
-    return coords
 
 async def get_driving_data_cached(origin_coords: Tuple[float, float], dest_coords: Tuple[float, float], origin_zip: str, dest_zip: str) -> Optional[Dict[str, float]]:
     """Get driving data with bidirectional caching."""
@@ -128,27 +116,6 @@ def get_driving_cache_key(origin_zip: str, dest_zip: str) -> str:
     """Generate consistent cache key for bidirectional routes."""
     sorted_zips = sorted([origin_zip, dest_zip])
     return f"driving:{sorted_zips[0]}:{sorted_zips[1]}"
-
-async def batch_get_coordinates(zip_codes: List[str], max_concurrent: int = 10) -> Dict[str, Optional[Tuple[float, float]]]:
-    """Get coordinates for multiple ZIP codes concurrently."""
-    semaphore = asyncio.Semaphore(max_concurrent)
-    
-    async def get_single_coords(zip_code: str) -> Tuple[str, Optional[Tuple[float, float]]]:
-        async with semaphore:
-            coords = await get_coordinates_cached(zip_code)
-            return zip_code, coords
-    
-    tasks = [get_single_coords(zip_code) for zip_code in zip_codes]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    coordinate_map = {}
-    for result in results:
-        if isinstance(result, Exception):
-            continue
-        zip_code, coords = result
-        coordinate_map[zip_code] = coords
-    
-    return coordinate_map
 
 async def batch_get_driving_data(origin_coords: Tuple[float, float], dest_coords_list: List[Tuple[float, float]], origin_zip: str, dest_zips: List[str], max_concurrent: int = 5) -> List[Optional[Dict[str, float]]]:
     """Get driving data for multiple destinations concurrently."""
@@ -175,24 +142,24 @@ async def batch_get_driving_data(origin_coords: Tuple[float, float], dest_coords
     return driving_data_list
 
 async def fetch_warehouses_from_airtable(force_refresh: bool = False) -> list[any]:
-    """Fetch warehouses with smart caching and invalidation strategies."""
+    """Fetch warehouses from Master view with smart caching and invalidation strategies."""
     
     # Check if we should verify Airtable for updates
     should_check = _cache.should_check_airtable() or force_refresh
     
     if not should_check:
         # Return cached data if available and not expired
-        cached_warehouses = _cache.get("warehouses:all")
+        cached_warehouses = _cache.get("warehouses:master_api")
         if cached_warehouses:
             return cached_warehouses
     
-    # Fetch fresh data from Airtable
+    # Fetch fresh data from Airtable Master view
     url = f"https://api.airtable.com/v0/{BASE_ID}/{WAREHOUSE_TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_TOKEN}"
     }
     params = {
-        # Removed view parameter to fetch all warehouses regardless of view state
+        "view": "Warehouse Master API"  # Use Warehouse Master API view to get all fields including coordinates
     }
 
     records = []
@@ -213,8 +180,8 @@ async def fetch_warehouses_from_airtable(force_refresh: bool = False) -> list[an
     # Shorter TTL for more frequent checks, longer for stable data
     ttl = 1800 if should_check else 3600  # 30 min vs 1 hour
     
-    # Cache the result
-    _cache.set("warehouses:all", records, ttl=ttl)
+    # Cache the result with Warehouse Master API view key
+    _cache.set("warehouses:master_api", records, ttl=ttl)
     return records
 
 async def invalidate_warehouse_cache() -> Dict[str, Any]:
@@ -263,61 +230,47 @@ def find_missing_fields(fields: dict) -> List[str]:
             missing.append(field_name)
     return missing
 
-from services.geolocation.geolocation_service import (
-    get_coordinates_mapbox,
-    get_coordinates_google,
-    get_driving_distance_and_time_google,
-    haversine,
-)
-
-
 async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
-    """Optimized version with caching and batch processing."""
+    """Optimized version using lat/lng from Airtable - no coordinate API calls needed!"""
     origin_coords = get_coordinates_mapbox(origin_zip)
     if not origin_coords:
         return {"error": "Invalid ZIP code"}
 
     warehouses: List[WarehouseData] = await fetch_warehouses_from_airtable()
     
-    # Haversine distance pre-filtering to reduce API calls
-    all_zips = []
-    valid_warehouses = []
+    # Direct Haversine calculation using lat/lng from Airtable (no API calls!)
+    haversine_filtered_warehouses = []
+    warehouses_with_coords = 0
+    warehouses_without_coords = 0
     
     for wh in warehouses:
-        wh_zip = wh["fields"].get("ZIP")
-        if wh_zip:
-            all_zips.append(wh_zip)  # Keep all ZIP codes, including duplicates
-            valid_warehouses.append(wh)
-    
-    print(f"Initial processing: {len(warehouses)} → {len(valid_warehouses)} warehouses")
-    
-    # Batch get coordinates for all ZIP codes (including duplicates)
-    zip_coords_map = await batch_get_coordinates(all_zips, max_concurrent=10)
-    
-    # Haversine distance pre-filtering
-    haversine_filtered_warehouses = []
-    for wh in valid_warehouses:
-        wh_zip = wh["fields"].get("ZIP")
-        wh_coords = zip_coords_map.get(wh_zip)
+        lat = wh["fields"].get("Latitude")
+        lng = wh["fields"].get("Longitude")
         
-        if not wh_coords:
-            continue
+        if lat and lng:
+            warehouses_with_coords += 1
+            # Direct Haversine calculation (no API calls!)
+            straight_line_miles = haversine(
+                origin_coords[0], origin_coords[1],
+                float(lat), float(lng)
+            )
             
-        # Fast Haversine pre-filter with generous buffer
-        straight_line_miles = haversine(
-            origin_coords[0], origin_coords[1],
-            wh_coords[0], wh_coords[1]
-        )
-        
-        if straight_line_miles <= radius_miles * 2:
-            haversine_filtered_warehouses.append({
-                'warehouse': wh,
-                'coordinates': wh_coords,
-                'zip': wh_zip,
-                'haversine_distance': straight_line_miles
-            })
+            # Use 2x buffer for Haversine pre-filtering
+            if straight_line_miles <= radius_miles * 2:
+                haversine_filtered_warehouses.append({
+                    'warehouse': wh,
+                    'coordinates': (float(lat), float(lng)),
+                    'zip': wh["fields"].get("ZIP"),
+                    'haversine_distance': straight_line_miles
+                })
+        else:
+            warehouses_without_coords += 1
     
-    print(f"Haversine pre-filtering: {len(valid_warehouses)} → {len(haversine_filtered_warehouses)} warehouses")
+    print(f"📊 Coordinate analysis: {warehouses_with_coords} with coordinates, {warehouses_without_coords} without")
+    print(f"🎯 Haversine pre-filtering: {len(warehouses)} → {len(haversine_filtered_warehouses)} warehouses")
+    
+    if not haversine_filtered_warehouses:
+        return {"origin_zip": origin_zip, "warehouses": [], "ai_analysis": GENERAL_AI_ANALYSIS}
     
     # Process Haversine-filtered warehouses for driving distance calculation
     candidate_warehouses = []
@@ -327,6 +280,7 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
         wh_zip = item['zip']
         haversine_distance = item['haversine_distance']
         
+        # Additional 2x buffer for driving distance (total 2x * 2x = 4x buffer)
         if haversine_distance <= radius_miles * 2:  # 2x buffer for driving distance
             candidate_warehouses.append({
                 'warehouse': wh,
@@ -382,8 +336,7 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
 
     return {"origin_zip": origin_zip, "warehouses": nearby, "ai_analysis": ai_analysis}
 
-import httpx
-
+# Additional functions for orders (unchanged)
 async def fetch_orders_by_requestid_from_airtable(request_id: int) -> List[OrderData]:
     url = f"https://api.airtable.com/v0/{BASE_ID}/{ODER_TABLE_NAME}"
     headers = {
@@ -391,7 +344,6 @@ async def fetch_orders_by_requestid_from_airtable(request_id: int) -> List[Order
     }
     params = {
         "filterByFormula": f"{{Request ID}} = {request_id}",
-        # Removed view parameter to fetch all orders regardless of view state
     }
 
     async with httpx.AsyncClient() as client:
@@ -401,22 +353,17 @@ async def fetch_orders_by_requestid_from_airtable(request_id: int) -> List[Order
 
     records = data.get("records", [])
     if not records:
-        return []  # return empty list if no matches
+        return []
 
     results: List[OrderData] = []
-
     for record in records:
         fields = record.get("fields", {})
-
         request_images: List[str] = []
         raw_images = fields.get("BOL & Pictures")
 
         if isinstance(raw_images, str):
-            # Case: "filename (url), filename (url)"
             request_images = re.findall(r"\((https?://[^\)]+)\)", raw_images)
-
         elif isinstance(raw_images, list):
-            # Case: array of objects with "url"
             for img in raw_images:
                 if isinstance(img, dict) and "url" in img:
                     request_images.append(img["url"])
@@ -431,15 +378,12 @@ async def fetch_orders_by_requestid_from_airtable(request_id: int) -> List[Order
 
     return results
 
-
 async def fetch_orders_from_airtable():
     url = f"https://api.airtable.com/v0/{BASE_ID}/{ODER_TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_TOKEN}"
     }
-    params = {
-        # Removed view parameter to fetch all orders regardless of view state
-    }
+    params = {}
 
     records = []
     async with httpx.AsyncClient() as client:
