@@ -6,6 +6,7 @@ import os
 import time
 
 from services.messaging.email_service import send_bulk_email
+from services.geolocation.geolocation_service import get_coordinates_mapbox
 from warehouse.models import LocationRequest, ResponseModel, SendBulkEmailData, SendEmailData
 from warehouse.warehouse_service import fetch_orders_by_requestid_from_airtable, fetch_orders_from_airtable, fetch_warehouses_from_airtable, find_nearby_warehouses, invalidate_warehouse_cache, get_cache_status
 
@@ -71,10 +72,6 @@ async def send_bulk_email_endpoint(send_bulk_emails: SendBulkEmailData):
 async def refresh_cache():
     """Manually refresh warehouse cache from Airtable."""
     try:
-        # Optional: Add admin authentication for production
-        #     raise HTTPException(status_code=401, detail="Invalid admin key")
-        
-        # Force refresh by bypassing cache
         warehouses = await fetch_warehouses_from_airtable(force_refresh=True)
         return ResponseModel(
             status="success", 
@@ -106,18 +103,43 @@ async def get_cache_status_endpoint():
         raise HTTPException(status_code=500, detail=f"Failed to get cache status: {str(e)}")
 
 
+async def update_airtable_coordinates(record_id: str, latitude: float, longitude: float):
+    """Update Airtable record with calculated coordinates."""
+    try:
+        airtable_token = os.getenv("AIRTABLE_TOKEN")
+        base_id = os.getenv("BASE_ID")
+        table_name = "Warehouses"
+        
+        url = f"https://api.airtable.com/v0/{base_id}/{table_name}/{record_id}"
+        headers = {
+            "Authorization": f"Bearer {airtable_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "fields": {
+                "Latitude": latitude,
+                "Longitude": longitude
+            }
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.patch(url, headers=headers, json=payload)
+            response.raise_for_status()
+            
+        print(f"✅ Updated coordinates for record {record_id}: {latitude}, {longitude}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to update coordinates for record {record_id}: {str(e)}")
+        return False
+
 @warehouse_router.post("/webhook")
 async def airtable_webhook(request: dict):
-    """Handle Airtable webhook notifications for real-time cache invalidation."""
+    """Handle Airtable webhook notifications for real-time cache invalidation and coordinate calculation."""
     try:
         print(f"📨 Webhook received: {request}")
         
-        # Optional: Add webhook authentication
-        # webhook_secret = request.headers.get("X-Airtable-Webhook-Secret")
-        # if webhook_secret != os.getenv("AIRTABLE_WEBHOOK_SECRET"):
-        #     raise HTTPException(status_code=401, detail="Invalid webhook secret")
-        
-        # Process the warehouse data from Airtable
         warehouse_data = request
         
         # Log the received data
@@ -126,11 +148,64 @@ async def airtable_webhook(request: dict):
         # Clear cache when Airtable data changes
         await invalidate_warehouse_cache()
         
+        # Check if coordinates need to be calculated
+        zip_code = warehouse_data.get("ZIP")
+        record_id = warehouse_data.get("Record ID")
+        current_lat = warehouse_data.get("Latitude")
+        current_lng = warehouse_data.get("Longitude")
+        
+        coordinate_update_result = None
+        
+        # Only calculate coordinates if:
+        # 1. Warehouse has a ZIP code
+        # 2. Either latitude or longitude is missing
+        # 3. We have a valid record ID
+        if zip_code and record_id and (not current_lat or not current_lng):
+            
+            try:
+                # Get coordinates using Mapbox API
+                coordinates = get_coordinates_mapbox(zip_code)
+                
+                if coordinates:
+                    lat, lng = coordinates
+                    print(f"📍 Coordinates found: {lat}, {lng}")
+                    
+                    # Update Airtable with new coordinates
+                    update_success = await update_airtable_coordinates(record_id, lat, lng)
+                    coordinate_update_result = {
+                        "coordinates_calculated": True,
+                        "latitude": lat,
+                        "longitude": lng,
+                        "airtable_updated": update_success
+                    }
+                else:
+                    print(f"⚠️ No coordinates found for ZIP: {zip_code}")
+                    coordinate_update_result = {
+                        "coordinates_calculated": False,
+                        "reason": "No coordinates found for ZIP code"
+                    }
+                    
+            except Exception as coord_error:
+                print(f"❌ Coordinate calculation error: {str(coord_error)}")
+                coordinate_update_result = {
+                    "coordinates_calculated": False,
+                    "error": str(coord_error)
+                }
+        else:
+            if not zip_code:
+                print("ℹ️ No ZIP code provided, skipping coordinate calculation")
+            elif current_lat and current_lng:
+                print("ℹ️ Coordinates already exist, skipping calculation")
+            else:
+                print("ℹ️ No record ID provided, skipping coordinate calculation")
+        
         return ResponseModel(
             status="success", 
             data={
                 "message": "Webhook processed successfully",
                 "warehouse_name": warehouse_data.get("Warehouse Name"),
+                "cache_invalidated": True,
+                "coordinate_update": coordinate_update_result,
                 "timestamp": time.time()
             }
         )
