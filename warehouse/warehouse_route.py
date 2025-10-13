@@ -154,6 +154,11 @@ async def airtable_webhook(request: dict):
         current_lat = warehouse_data.get("Latitude")
         current_lng = warehouse_data.get("Longitude")
         
+        # Debug logging
+        print(f"🔍 Debug - ZIP: {zip_code}, Record ID: {record_id}")
+        print(f"🔍 Debug - Current Lat: {current_lat}, Current Lng: {current_lng}")
+        print(f"🔍 Debug - Full warehouse data: {warehouse_data}")
+        
         coordinate_update_result = None
         
         # Only calculate coordinates if:
@@ -161,6 +166,7 @@ async def airtable_webhook(request: dict):
         # 2. Either latitude or longitude is missing
         # 3. We have a valid record ID
         if zip_code and record_id and (not current_lat or not current_lng):
+            print(f"🔍 Calculating coordinates for warehouse with ZIP: {zip_code}")
             
             try:
                 # Get coordinates using Mapbox API
