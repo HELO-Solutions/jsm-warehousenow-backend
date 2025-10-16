@@ -142,7 +142,7 @@ async def batch_get_driving_data(origin_coords: Tuple[float, float], dest_coords
     return driving_data_list
 
 async def fetch_warehouses_from_airtable(force_refresh: bool = False) -> list[any]:
-    """Fetch warehouses from Master view with smart caching and invalidation strategies."""
+    """Fetch warehouses with smart caching and invalidation strategies."""
     
     # Check if we should verify Airtable for updates
     should_check = _cache.should_check_airtable() or force_refresh
@@ -153,13 +153,13 @@ async def fetch_warehouses_from_airtable(force_refresh: bool = False) -> list[an
         if cached_warehouses:
             return cached_warehouses
     
-    # Fetch fresh data from Airtable Master view
+    # Fetch fresh data from Airtable 
     url = f"https://api.airtable.com/v0/{BASE_ID}/{WAREHOUSE_TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_TOKEN}"
     }
     params = {
-        "view": "Warehouse Master API"  # Use Warehouse Master API view to get all fields including coordinates
+        
     }
 
     records = []
@@ -234,7 +234,7 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
     """Optimized version using lat/lng from Airtable - no coordinate API calls needed!"""
     origin_coords = get_coordinates_mapbox(origin_zip)
     if not origin_coords:
-        return {"error": "Invalid ZIP code"}
+        return {"origin_zip": origin_zip, "warehouses": [], "ai_analysis": GENERAL_AI_ANALYSIS, "error": "Invalid ZIP code"}
 
     warehouses: List[WarehouseData] = await fetch_warehouses_from_airtable()
     
@@ -319,12 +319,20 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
             wh_copy["tier_rank"] = _tier_rank(wh["fields"].get("Tier"))
             wh_copy["tags"] = find_missing_fields(wh["fields"])
             wh_copy["has_missed_fields"] = bool(wh_copy["tags"])
-            wh_copy["warehouse_id"] = wh["fields"]["WarehouseID"]
+            wh_copy["warehouse_id"] = wh["fields"].get("WarehouseID", "")
             
             nearby.append(wh_copy)
     
     # Sort final list
     nearby.sort(key=lambda x: (x["tier_rank"], x["duration_minutes"], x["distance_miles"]))
+
+    # Debug: Check for any objects that might cause React issues
+    for i, warehouse in enumerate(nearby):
+        for key, value in warehouse.items():
+            if isinstance(value, dict) and key != "fields":
+                print(f"⚠️ Warning: Warehouse {i} has object field '{key}': {value}")
+            elif isinstance(value, list) and any(isinstance(item, dict) for item in value):
+                print(f"⚠️ Warning: Warehouse {i} has list with objects in field '{key}': {value}")
 
     # AI analysis with fallback
     try:
