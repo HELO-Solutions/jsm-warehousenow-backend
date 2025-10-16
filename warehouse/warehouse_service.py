@@ -159,7 +159,7 @@ async def fetch_warehouses_from_airtable(force_refresh: bool = False) -> list[an
         "Authorization": f"Bearer {AIRTABLE_TOKEN}"
     }
     params = {
-        "view": "Warehouse Master API"  # Use Warehouse Master API view to get all fields including coordinates
+        
     }
 
     records = []
@@ -398,3 +398,4 @@ async def fetch_orders_from_airtable():
                 break
     
     return records
+
