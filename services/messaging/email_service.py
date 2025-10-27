@@ -5,6 +5,7 @@ import base64
 import logging
 import mimetypes
 import re
+import uuid
 
 import aiohttp
 from warehouse.models import SendBulkEmailData, SendEmailData
@@ -23,13 +24,24 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 
 async def send_bulk_email(send_bulk_emails: SendBulkEmailData):
     results = []
-    for email_data in send_bulk_emails.emails_data:
+    unique_email_data = remove_duplicate_emails(send_bulk_emails.emails_data)
+    for email_data in unique_email_data:
         body = send_bulk_emails.email_body
         image_paths_or_urls = send_bulk_emails.images
         result = await send_email(body, email_data, image_paths_or_urls)
         results.append(result)
     return results
 
+def remove_duplicate_emails(data):
+    seen = set()
+    unique = []
+    for item in data:
+        # Normalize email: strip spaces and lower-case
+        key = (item.email or "").strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique
 
 async def send_email(
     email_body: str,
@@ -69,7 +81,7 @@ async def send_email(
     message = EmailMessage()
     message["From"] = f"WarehouseNow <{SMTP_USER}>"
     message["To"] = email_data.email
-    message["Subject"] = email_data.email_subject
+    message["Subject"] = f"{email_data.email_subject}"
 
     message.set_content("Please view this email in HTML mode.")
     message.add_alternative(email_body, subtype="html")
@@ -172,6 +184,7 @@ async def send_email(
             start_tls=True,
             username=SMTP_USER,
             password=SMTP_PASS,
+            #mail_from=f"WarehouseNow{uuid.uuid4().hex[:6]}@warehousenow.com"
         )
         return {"status": "success", "to": email_data.email}
     except Exception as e:
