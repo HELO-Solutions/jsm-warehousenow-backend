@@ -98,4 +98,107 @@ class SendBulkEmailData(BaseModel):
 class OrderData(BaseModel):
     commodity: Optional[str] = None
     loading_method: Optional[str] = None
-    request_images : list[str] = None 
+    request_images : list[str] = None
+
+# Coverage Gap Analysis Models
+class StaticWarehouseData(BaseModel):
+    id: str
+    warehouse_id: str
+    name: str
+    city: str
+    state: str
+    zipCode: str
+    status: str
+    tier: str
+    lat: float
+    lng: float
+    hazmat: str
+    disposal: str
+    warehouseTempControlled: str
+    foodGrade: str
+    paperClamps: str
+    parkingSpots: str
+    reqCount: int  # Number of requests for this warehouse
+
+class CoverageGap(BaseModel):
+    zipCode: str
+    city: str
+    state: str
+    warehouseCount: int
+    minimumDistance: float
+    gapScore: float
+
+class HighRequestArea(BaseModel):
+    zipCode: str
+    city: str
+    state: str
+    requestCount: int
+    warehouseCount: int
+    coverageRatio: float
+
+class RequestTrends(BaseModel):
+    pastWeekChange: float
+    past3MonthsChange: float
+    trendDirection: str  # 'increasing' | 'decreasing' | 'stable'
+
+class Recommendation(BaseModel):
+    priority: str  # 'high' | 'medium' | 'low'
+    action: str
+    targetZipCodes: List[str]
+    reasoning: str
+
+class AIAnalysisData(BaseModel):
+    coverageGaps: List[CoverageGap]
+    highRequestAreas: List[HighRequestArea]
+    requestTrends: RequestTrends
+    recommendations: List[Recommendation]
+
+class MockWarehouse(BaseModel):
+    id: str
+    name: str
+    tier: str
+    distance: float
+
+class CoverageAnalysis(BaseModel):
+    zipCode: str
+    city: str
+    state: str
+    population: int
+    latitude: float
+    longitude: float
+    nearbyWarehouses: List[MockWarehouse]
+    minimumDistance: float
+    warehouseCount: int
+    coverageDensityScore: float
+    populationWeightedGapScore: float
+    hasCoverageGap: bool
+    expansionOpportunity: str  # 'None' | 'Moderate' | 'High'
+    # New fields for tier-specific counts
+    goldWarehouseCount: int
+    silverWarehouseCount: int
+    bronzeWarehouseCount: int
+    # New field for warehouses per 100 sq miles
+    warehousesPer100SqMiles: float
+    reqCount: int  # Total requests for this zipcode
+
+class CoverageAnalysisResponse(BaseModel):
+    warehouses: List[StaticWarehouseData]
+    coverageAnalysis: List[CoverageAnalysis]
+    average_number_of_requests: int
+    totalWarehouses: int
+    totalRequests: int
+    analysisRadius: int 
+
+class CoverageGapFilters(BaseModel):
+    tier: Optional[List[str]] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    hazmat: Optional[List[str]] = None
+    disposal: Optional[List[str]] = None
+    warehouseTempControlled: Optional[List[str]] = None
+    foodGrade: Optional[List[str]] = None
+    paperClamps: Optional[List[str]] = None
+    parkingSpots: Optional[List[str]] = None
+
+class CoverageGapRequest(BaseModel):
+    filters: Optional[CoverageGapFilters] = None
