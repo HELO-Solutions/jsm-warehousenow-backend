@@ -4,6 +4,7 @@ This eliminates the need for coordinate API calls, saving significant costs.
 """
 
 import os
+import re
 import time
 import asyncio
 import re
