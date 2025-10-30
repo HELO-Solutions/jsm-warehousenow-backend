@@ -9,7 +9,8 @@ import time
 from services.messaging.email_service import send_bulk_email
 from services.geolocation.geolocation_service import get_coordinates_mapbox
 from warehouse.models import LocationRequest, ResponseModel, SendBulkEmailData, SendEmailData, CoverageAnalysisResponse, AIAnalysisData, CoverageGapRequest
-from warehouse.warehouse_service import fetch_orders_by_requestid_from_airtable, fetch_orders_from_airtable, fetch_warehouses_from_airtable, find_nearby_warehouses, invalidate_warehouse_cache, get_cache_status, get_coverage_gap_analysis, get_ai_analysis_only
+from warehouse.warehouse_service import fetch_orders_by_requestid_from_airtable, fetch_orders_from_airtable, fetch_warehouses_from_airtable, find_nearby_warehouses, invalidate_warehouse_cache, get_cache_status
+from services.coverage_gap.coverage_gap_service import get_coverage_gap_analysis, get_ai_analysis_only
 
 
 warehouse_router = APIRouter()
