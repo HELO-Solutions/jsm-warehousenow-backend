@@ -7,6 +7,7 @@ import os
 import re
 import time
 import asyncio
+import re
 from typing import List, Optional, Dict, Any, Tuple
 from threading import Lock
 
@@ -62,7 +63,7 @@ class MemoryCache:
     def clear_warehouse_cache(self) -> None:
         """Clear all warehouse-related cache entries."""
         with self._lock:
-            keys_to_delete = [key for key in self._cache.keys() if key.startswith(('warehouses:', 'driving:'))]
+            keys_to_delete = [key for key in self._cache.keys() if key.startswith(('warehouses:', 'driving:', 'requests:', 'coverage_gap:'))]
             for key in keys_to_delete:
                 del self._cache[key]
     
@@ -82,6 +83,8 @@ class MemoryCache:
             expired_entries = sum(1 for entry in self._cache.values() if self._is_expired(entry))
             warehouse_entries = sum(1 for key in self._cache.keys() if key.startswith('warehouses:'))
             driving_entries = sum(1 for key in self._cache.keys() if key.startswith('driving:'))
+            request_entries = sum(1 for key in self._cache.keys() if key.startswith('requests:'))
+            coverage_gap_entries = sum(1 for key in self._cache.keys() if key.startswith('coverage_gap:'))
             
             return {
                 'total_entries': total_entries,
@@ -89,6 +92,8 @@ class MemoryCache:
                 'active_entries': total_entries - expired_entries,
                 'warehouse_entries': warehouse_entries,
                 'driving_entries': driving_entries,
+                'request_entries': request_entries,
+                'coverage_gap_entries': coverage_gap_entries,
                 'last_airtable_check': self._last_airtable_check,
                 'cache_age_hours': (current_time - self._last_airtable_check) / 3600
             }
@@ -407,4 +412,6 @@ async def fetch_orders_from_airtable():
                 break
     
     return records
+
+
 
