@@ -37,9 +37,15 @@ async def coverage_gap_warehouses(
 
 
 @coverage_gap_router.post("/ai_analysis", response_model=ResponseModel[AIAnalysisData])
-async def ai_analysis(request: CoverageGapRequest = CoverageGapRequest()):
+async def ai_analysis(
+    request: CoverageGapRequest = CoverageGapRequest(),
+    radius: Optional[float] = None
+):
     """
     Get AI analysis for coverage gaps, trends, and recommendations.
+    
+    Query parameters:
+    - radius: Radius in miles for grouping nearby warehouses (default: groups by zipcode only)
     
     Accepts optional filters in request body to filter warehouses by tier, state, city, etc.
     
@@ -50,7 +56,7 @@ async def ai_analysis(request: CoverageGapRequest = CoverageGapRequest()):
     - AI-generated recommendations
     """
     try:
-        data = await get_ai_analysis_only(request.filters)
+        data = await get_ai_analysis_only(request.filters, radius)
         return ResponseModel(
             status="success",
             data=data

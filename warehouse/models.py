@@ -174,9 +174,10 @@ class CoverageAnalysis(BaseModel):
     hasCoverageGap: bool
     expansionOpportunity: str  # 'None' | 'Moderate' | 'High'
     # New fields for tier-specific counts
-    goldWarehouseCount: int
+    goldWarehouseCount: int  # Includes both "Gold" and "Potential Gold" tiers
     silverWarehouseCount: int
     bronzeWarehouseCount: int
+    unTieredWarehouseCount: int  # Warehouses without a tier value
     # New field for warehouses per 100 sq miles
     warehousesPer100SqMiles: float
     reqCount: int  # Total requests for this zipcode

@@ -272,6 +272,26 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
         # Calculate REAL request trends based on actual historical data
         request_trends = await get_request_trends(total_requests)
         
+        # Calculate gold warehouse counts per zipcode for correlation insights
+        zipcode_gold_counts = {}
+        zipcode_metrics = {}
+        for zipcode, data in zipcode_warehouses.items():
+            gold_count = sum(1 for w in data["warehouses"] if w.tier in ["Gold", "Potential Gold"])
+            silver_count = sum(1 for w in data["warehouses"] if w.tier == "Silver")
+            bronze_count = sum(1 for w in data["warehouses"] if w.tier == "Bronze")
+            total_warehouses = len(data["warehouses"])
+            
+            zipcode_gold_counts[zipcode] = gold_count
+            zipcode_metrics[zipcode] = {
+                "gold_count": gold_count,
+                "silver_count": silver_count,
+                "bronze_count": bronze_count,
+                "total_warehouses": total_warehouses,
+                "total_requests": data["totalRequests"],
+                "city": data["city"],
+                "state": data["state"]
+            }
+        
         # Create REAL recommendations based on actual analysis
         recommendations = []
         if coverage_gaps:
@@ -292,6 +312,161 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
                 action="Focus on areas with highest request volume",
                 targetZipCodes=[area.zipCode for area in top_request_areas],
                 reasoning=f"Top 10 areas with {sum(area.requestCount for area in top_request_areas)} total requests"
+            ))
+        
+        # 1. DATA QUALITY FLAGS: Identify zip codes with high warehouse count but zero/low gold warehouses
+        data_quality_issues = []
+        for zipcode, metrics in zipcode_metrics.items():
+            total_warehouses = metrics["total_warehouses"]
+            gold_count = metrics["gold_count"]
+            total_requests = metrics["total_requests"]
+            
+            # Flag if: 10+ warehouses but 0-1 gold warehouses, OR 5+ warehouses with 0 gold and some requests
+            if (total_warehouses >= 10 and gold_count <= 1) or (total_warehouses >= 5 and gold_count == 0 and total_requests > 0):
+                data_quality_issues.append({
+                    "zipcode": zipcode,
+                    "city": metrics["city"],
+                    "state": metrics["state"],
+                    "total_warehouses": total_warehouses,
+                    "gold_count": gold_count,
+                    "total_requests": total_requests
+                })
+        
+        # Sort by warehouse count (highest first) to prioritize most critical issues
+        data_quality_issues.sort(key=lambda x: x["total_warehouses"], reverse=True)
+        
+        if data_quality_issues:
+            # Get top 10 data quality issues
+            top_quality_issues = data_quality_issues[:10]
+            quality_zipcodes = [issue["zipcode"] for issue in top_quality_issues]
+            
+            # Build detailed reasoning with examples
+            example_issues = []
+            for issue in top_quality_issues[:3]:  # Show top 3 examples
+                example_issues.append(
+                    f"{issue['city']} {issue['state']} {issue['zipcode']}: "
+                    f"{issue['total_warehouses']} warehouses, {issue['gold_count']} gold, "
+                    f"{issue['total_requests']} requests"
+                )
+            
+            reasoning = f"Data quality issue - {len(data_quality_issues)} zip codes with high warehouse count but zero/low gold warehouses. "
+            reasoning += "Warehouses need tier evaluation. Examples: " + "; ".join(example_issues)
+            
+            recommendations.append(Recommendation(
+                priority="medium",
+                action="Data quality issue - warehouses need tier evaluation",
+                targetZipCodes=quality_zipcodes,
+                reasoning=reasoning
+            ))
+        
+        # 2. HIGH REQUEST + LOW COVERAGE CORRELATION: Highlight zip codes with high request volume AND low gold warehouse count
+        high_request_low_coverage = []
+        for zipcode, metrics in zipcode_metrics.items():
+            total_requests = metrics["total_requests"]
+            gold_count = metrics["gold_count"]
+            silver_count = metrics["silver_count"]
+            
+            # Flag if: 10+ requests but 0-2 gold warehouses (high demand, low quality coverage)
+            if total_requests >= 10 and gold_count <= 2:
+                high_request_low_coverage.append({
+                    "zipcode": zipcode,
+                    "city": metrics["city"],
+                    "state": metrics["state"],
+                    "total_requests": total_requests,
+                    "gold_count": gold_count,
+                    "silver_count": silver_count,
+                    "total_warehouses": metrics["total_warehouses"]
+                })
+        
+        # Sort by request count (highest first)
+        high_request_low_coverage.sort(key=lambda x: x["total_requests"], reverse=True)
+        
+        if high_request_low_coverage:
+            # Get top 10 priority coverage gaps
+            top_coverage_gaps = high_request_low_coverage[:10]
+            coverage_gap_zipcodes = [gap["zipcode"] for gap in top_coverage_gaps]
+            
+            # Build detailed reasoning with examples
+            example_gaps = []
+            for gap in top_coverage_gaps[:3]:  # Show top 3 examples
+                tier_summary = f"{gap['gold_count']} gold"
+                if gap['silver_count'] > 0:
+                    tier_summary += f" + {gap['silver_count']} silver"
+                example_gaps.append(
+                    f"{gap['city']} {gap['state']} {gap['zipcode']}: "
+                    f"{gap['total_requests']} requests, only {tier_summary}"
+                )
+            
+            reasoning = f"Priority coverage gap: {len(high_request_low_coverage)} zip codes with high request volume AND low gold warehouse count. "
+            reasoning += "Examples: " + "; ".join(example_gaps)
+            
+            recommendations.append(Recommendation(
+                priority="high",
+                action="Priority coverage gap: High requests with low gold warehouse coverage",
+                targetZipCodes=coverage_gap_zipcodes,
+                reasoning=reasoning
+            ))
+        
+        # 3. REQUEST VOLUME VS GOLD AVAILABILITY: Show recommended zip codes based on request-to-gold ratio
+        request_to_gold_ratios = []
+        for zipcode, metrics in zipcode_metrics.items():
+            total_requests = metrics["total_requests"]
+            gold_count = metrics["gold_count"]
+            
+            # Only consider zipcodes with requests and warehouses
+            if total_requests > 0 and metrics["total_warehouses"] > 0:
+                # Calculate request-to-gold ratio (higher = more requests per gold warehouse)
+                if gold_count > 0:
+                    ratio = total_requests / gold_count
+                else:
+                    # If no gold warehouses, use a high ratio to prioritize
+                    ratio = total_requests * 10  # Penalize lack of gold warehouses
+                
+                request_to_gold_ratios.append({
+                    "zipcode": zipcode,
+                    "city": metrics["city"],
+                    "state": metrics["state"],
+                    "total_requests": total_requests,
+                    "gold_count": gold_count,
+                    "ratio": ratio,
+                    "total_warehouses": metrics["total_warehouses"]
+                })
+        
+        # Sort by ratio (highest first) - areas where requests significantly outpace gold availability
+        request_to_gold_ratios.sort(key=lambda x: x["ratio"], reverse=True)
+        
+        if request_to_gold_ratios:
+            # Get top 10 areas with highest request-to-gold ratio
+            top_ratio_areas = request_to_gold_ratios[:10]
+            ratio_zipcodes = [area["zipcode"] for area in top_ratio_areas]
+            
+            # Calculate recommended additional gold warehouses
+            recommended_gold_warehouses = []
+            for area in top_ratio_areas[:5]:  # Show top 5 examples
+                # Recommend 1 gold warehouse per 5-10 requests (depending on current ratio)
+                if area["gold_count"] == 0:
+                    recommended = max(1, area["total_requests"] // 5)
+                else:
+                    # If some gold exists, recommend based on ratio
+                    ideal_ratio = 5  # 1 gold per 5 requests
+                    current_requests_per_gold = area["total_requests"] / area["gold_count"] if area["gold_count"] > 0 else area["total_requests"]
+                    recommended = max(0, int((current_requests_per_gold - ideal_ratio) / ideal_ratio * area["gold_count"]))
+                    recommended = max(1, recommended)  # At least 1
+                
+                recommended_gold_warehouses.append(
+                    f"{area['city']} {area['state']} {area['zipcode']}: "
+                    f"{area['total_requests']} requests, {area['gold_count']} gold → "
+                    f"recommend {recommended} additional gold-tier warehouse(s)"
+                )
+            
+            reasoning = f"Request volume vs gold availability: {len(request_to_gold_ratios)} areas where requests significantly outpace quality warehouse availability. "
+            reasoning += "Consider recruiting additional gold-tier warehouses. Examples: " + "; ".join(recommended_gold_warehouses)
+            
+            recommendations.append(Recommendation(
+                priority="high",
+                action="Consider recruiting additional gold-tier warehouses in high-request areas",
+                targetZipCodes=ratio_zipcodes,
+                reasoning=reasoning
             ))
         
         return AIAnalysisData(
@@ -424,6 +599,24 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
     # Calculate REAL request trends based on actual historical data
     request_trends = await get_request_trends(total_requests)
     
+    # Calculate gold warehouse counts per zipcode for correlation insights
+    zipcode_metrics = {}
+    for zipcode, data in zipcode_warehouses.items():
+        gold_count = sum(1 for w in data["warehouses"] if w.tier in ["Gold", "Potential Gold"])
+        silver_count = sum(1 for w in data["warehouses"] if w.tier == "Silver")
+        bronze_count = sum(1 for w in data["warehouses"] if w.tier == "Bronze")
+        total_warehouses = len(data["warehouses"])
+        
+        zipcode_metrics[zipcode] = {
+            "gold_count": gold_count,
+            "silver_count": silver_count,
+            "bronze_count": bronze_count,
+            "total_warehouses": total_warehouses,
+            "total_requests": data["totalRequests"],
+            "city": data["city"],
+            "state": data["state"]
+        }
+    
     # Create REAL recommendations based on actual analysis
     recommendations = []
     if coverage_gaps:
@@ -444,6 +637,161 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
             action="Focus on areas with highest request volume",
             targetZipCodes=[area.zipCode for area in top_request_areas],
             reasoning=f"Top 10 areas with {sum(area.requestCount for area in top_request_areas)} total requests"
+        ))
+    
+    # 1. DATA QUALITY FLAGS: Identify zip codes with high warehouse count but zero/low gold warehouses
+    data_quality_issues = []
+    for zipcode, metrics in zipcode_metrics.items():
+        total_warehouses = metrics["total_warehouses"]
+        gold_count = metrics["gold_count"]
+        total_requests = metrics["total_requests"]
+        
+        # Flag if: 10+ warehouses but 0-1 gold warehouses, OR 5+ warehouses with 0 gold and some requests
+        if (total_warehouses >= 10 and gold_count <= 1) or (total_warehouses >= 5 and gold_count == 0 and total_requests > 0):
+            data_quality_issues.append({
+                "zipcode": zipcode,
+                "city": metrics["city"],
+                "state": metrics["state"],
+                "total_warehouses": total_warehouses,
+                "gold_count": gold_count,
+                "total_requests": total_requests
+            })
+    
+    # Sort by warehouse count (highest first) to prioritize most critical issues
+    data_quality_issues.sort(key=lambda x: x["total_warehouses"], reverse=True)
+    
+    if data_quality_issues:
+        # Get top 10 data quality issues
+        top_quality_issues = data_quality_issues[:10]
+        quality_zipcodes = [issue["zipcode"] for issue in top_quality_issues]
+        
+        # Build detailed reasoning with examples
+        example_issues = []
+        for issue in top_quality_issues[:3]:  # Show top 3 examples
+            example_issues.append(
+                f"{issue['city']} {issue['state']} {issue['zipcode']}: "
+                f"{issue['total_warehouses']} warehouses, {issue['gold_count']} gold, "
+                f"{issue['total_requests']} requests"
+            )
+        
+        reasoning = f"Data quality issue - {len(data_quality_issues)} zip codes with high warehouse count but zero/low gold warehouses. "
+        reasoning += "Warehouses need tier evaluation. Examples: " + "; ".join(example_issues)
+        
+        recommendations.append(Recommendation(
+            priority="medium",
+            action="Data quality issue - warehouses need tier evaluation",
+            targetZipCodes=quality_zipcodes,
+            reasoning=reasoning
+        ))
+    
+    # 2. HIGH REQUEST + LOW COVERAGE CORRELATION: Highlight zip codes with high request volume AND low gold warehouse count
+    high_request_low_coverage = []
+    for zipcode, metrics in zipcode_metrics.items():
+        total_requests = metrics["total_requests"]
+        gold_count = metrics["gold_count"]
+        silver_count = metrics["silver_count"]
+        
+        # Flag if: 10+ requests but 0-2 gold warehouses (high demand, low quality coverage)
+        if total_requests >= 10 and gold_count <= 2:
+            high_request_low_coverage.append({
+                "zipcode": zipcode,
+                "city": metrics["city"],
+                "state": metrics["state"],
+                "total_requests": total_requests,
+                "gold_count": gold_count,
+                "silver_count": silver_count,
+                "total_warehouses": metrics["total_warehouses"]
+            })
+    
+    # Sort by request count (highest first)
+    high_request_low_coverage.sort(key=lambda x: x["total_requests"], reverse=True)
+    
+    if high_request_low_coverage:
+        # Get top 10 priority coverage gaps
+        top_coverage_gaps = high_request_low_coverage[:10]
+        coverage_gap_zipcodes = [gap["zipcode"] for gap in top_coverage_gaps]
+        
+        # Build detailed reasoning with examples
+        example_gaps = []
+        for gap in top_coverage_gaps[:3]:  # Show top 3 examples
+            tier_summary = f"{gap['gold_count']} gold"
+            if gap['silver_count'] > 0:
+                tier_summary += f" + {gap['silver_count']} silver"
+            example_gaps.append(
+                f"{gap['city']} {gap['state']} {gap['zipcode']}: "
+                f"{gap['total_requests']} requests, only {tier_summary}"
+            )
+        
+        reasoning = f"Priority coverage gap: {len(high_request_low_coverage)} zip codes with high request volume AND low gold warehouse count. "
+        reasoning += "Examples: " + "; ".join(example_gaps)
+        
+        recommendations.append(Recommendation(
+            priority="high",
+            action="Priority coverage gap: High requests with low gold warehouse coverage",
+            targetZipCodes=coverage_gap_zipcodes,
+            reasoning=reasoning
+        ))
+    
+    # 3. REQUEST VOLUME VS GOLD AVAILABILITY: Show recommended zip codes based on request-to-gold ratio
+    request_to_gold_ratios = []
+    for zipcode, metrics in zipcode_metrics.items():
+        total_requests = metrics["total_requests"]
+        gold_count = metrics["gold_count"]
+        
+        # Only consider zipcodes with requests and warehouses
+        if total_requests > 0 and metrics["total_warehouses"] > 0:
+            # Calculate request-to-gold ratio (higher = more requests per gold warehouse)
+            if gold_count > 0:
+                ratio = total_requests / gold_count
+            else:
+                # If no gold warehouses, use a high ratio to prioritize
+                ratio = total_requests * 10  # Penalize lack of gold warehouses
+            
+            request_to_gold_ratios.append({
+                "zipcode": zipcode,
+                "city": metrics["city"],
+                "state": metrics["state"],
+                "total_requests": total_requests,
+                "gold_count": gold_count,
+                "ratio": ratio,
+                "total_warehouses": metrics["total_warehouses"]
+            })
+    
+    # Sort by ratio (highest first) - areas where requests significantly outpace gold availability
+    request_to_gold_ratios.sort(key=lambda x: x["ratio"], reverse=True)
+    
+    if request_to_gold_ratios:
+        # Get top 10 areas with highest request-to-gold ratio
+        top_ratio_areas = request_to_gold_ratios[:10]
+        ratio_zipcodes = [area["zipcode"] for area in top_ratio_areas]
+        
+        # Calculate recommended additional gold warehouses
+        recommended_gold_warehouses = []
+        for area in top_ratio_areas[:5]:  # Show top 5 examples
+            # Recommend 1 gold warehouse per 5-10 requests (depending on current ratio)
+            if area["gold_count"] == 0:
+                recommended = max(1, area["total_requests"] // 5)
+            else:
+                # If some gold exists, recommend based on ratio
+                ideal_ratio = 5  # 1 gold per 5 requests
+                current_requests_per_gold = area["total_requests"] / area["gold_count"] if area["gold_count"] > 0 else area["total_requests"]
+                recommended = max(0, int((current_requests_per_gold - ideal_ratio) / ideal_ratio * area["gold_count"]))
+                recommended = max(1, recommended)  # At least 1
+            
+            recommended_gold_warehouses.append(
+                f"{area['city']} {area['state']} {area['zipcode']}: "
+                f"{area['total_requests']} requests, {area['gold_count']} gold → "
+                f"recommend {recommended} additional gold-tier warehouse(s)"
+            )
+        
+        reasoning = f"Request volume vs gold availability: {len(request_to_gold_ratios)} areas where requests significantly outpace quality warehouse availability. "
+        reasoning += "Consider recruiting additional gold-tier warehouses. Examples: " + "; ".join(recommended_gold_warehouses)
+        
+        recommendations.append(Recommendation(
+            priority="high",
+            action="Consider recruiting additional gold-tier warehouses in high-request areas",
+            targetZipCodes=ratio_zipcodes,
+            reasoning=reasoning
         ))
     
     print(f"Data-based analysis results: {len(coverage_gaps)} gaps, {len(high_request_areas)} high-request areas, {len(recommendations)} recommendations")

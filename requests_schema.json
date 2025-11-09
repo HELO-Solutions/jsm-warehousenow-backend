@@ -1,0 +1,294 @@
+{
+  "table_name": "Requests",
+  "total_fields": 48,
+  "fields": {
+    "# of Pallets": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "2"
+    },
+    "# of Requests": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "1"
+    },
+    "BOL & Pictures": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "[{'id': 'att1xrZfbGeL2awHn', 'width': 480, 'height': 640, 'url': 'https://v5.airtableusercontent.com"
+    },
+    "C # of Pallets Rework": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "20"
+    },
+    "C- In $": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "15"
+    },
+    "C- Out $": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "15"
+    },
+    "C- Pallet Rework$": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "75"
+    },
+    "City": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "Dayton"
+    },
+    "Commodity": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "Beer load"
+    },
+    "Contact Email": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "['joshua_white@swifttrans.com']"
+    },
+    "Contact Name": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "['recF89IQVIeSv6K7V']"
+    },
+    "Created By": {
+      "python_type": "dict",
+      "is_list": false,
+      "is_dict": true,
+      "example": "{'id': 'usrynsjLZfGdfgOiE', 'email': 'estefania@warehousenow.com', 'name': 'Estefania Camacho Lozano"
+    },
+    "Created Time": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "2025-09-02T14:40:58.000Z"
+    },
+    "Customer Month": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "Swift - 2025-09"
+    },
+    "Customer Name Dropdown (from Contact Name)": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "['Swift']"
+    },
+    "Customers copy": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "Swift"
+    },
+    "Date Created": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "2025-09-02"
+    },
+    "Is Order (numeric)": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "1"
+    },
+    "Last Modified By": {
+      "python_type": "dict",
+      "is_list": false,
+      "is_dict": true,
+      "example": "{'id': 'usrynsjLZfGdfgOiE', 'email': 'estefania@warehousenow.com', 'name': 'Estefania Camacho Lozano"
+    },
+    "Last Modified Time": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "2025-09-24T21:08:02.000Z"
+    },
+    "Load Number": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "AIY7622"
+    },
+    "Loading Style": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "Pallet"
+    },
+    "Month": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "September"
+    },
+    "Month ": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "9"
+    },
+    "Month Name": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "September 2025"
+    },
+    "Notes": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "No invoice or receipt provided"
+    },
+    "Order Assigned": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "['Estefania ']"
+    },
+    "Orders Won ": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "1"
+    },
+    "Profit $": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "-112"
+    },
+    "Request": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "['Rework', 'Restack']"
+    },
+    "Request ID": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "95"
+    },
+    "Request ID Count": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "1"
+    },
+    "SOP Sent (Check box)": {
+      "python_type": "bool",
+      "is_list": false,
+      "is_dict": false,
+      "example": "True"
+    },
+    "State": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "OH"
+    },
+    "Status": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "['Closed ']"
+    },
+    "Subject Line": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "Swift Trip # AID5825 trlr # 120495"
+    },
+    "Total Revenue $": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "60"
+    },
+    "Trailer #": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "120495"
+    },
+    "W # of Pallets": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "15"
+    },
+    "W # of Pallets Reworked": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "13"
+    },
+    "W Flat Rate": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "172"
+    },
+    "W Total Charges": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "172"
+    },
+    "W-Price In": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "35"
+    },
+    "W-Price Pallet Reworked": {
+      "python_type": "int",
+      "is_list": false,
+      "is_dict": false,
+      "example": "65"
+    },
+    "WHS Invoice": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "[{'id': 'att9qCRLSvlqn9eSP', 'url': 'https://v5.airtableusercontent.com/v3/u/47/47/1762740000000/XYx"
+    },
+    "WHS Payment Method": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "EFS Code "
+    },
+    "Warehouse": {
+      "python_type": "list",
+      "is_list": true,
+      "is_dict": false,
+      "example": "['reczRdIvenSi1NDJ4']"
+    },
+    "Week": {
+      "python_type": "str",
+      "is_list": false,
+      "is_dict": false,
+      "example": "9/1/2025 - 9/7/2025"
+    }
+  }
+}
