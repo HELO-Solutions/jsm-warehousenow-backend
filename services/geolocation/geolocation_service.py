@@ -177,3 +177,34 @@ async def get_driving_distance_and_time_google(origin_coords: tuple, dest_coords
     except Exception as e:
         print(f"Error fetching driving data (Google Maps): {e}")
         return None
+
+async def update_airtable_coordinates(record_id: str, latitude: float, longitude: float):
+    """Update Airtable record with calculated coordinates."""
+    try:
+        airtable_token = os.getenv("AIRTABLE_TOKEN")
+        base_id = os.getenv("BASE_ID")
+        table_name = "Warehouses"
+        
+        url = f"https://api.airtable.com/v0/{base_id}/{table_name}/{record_id}"
+        headers = {
+            "Authorization": f"Bearer {airtable_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "fields": {
+                "Latitude": latitude,
+                "Longitude": longitude
+            }
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.patch(url, headers=headers, json=payload)
+            response.raise_for_status()
+            
+        print(f"Updated coordinates for record {record_id}: {latitude}, {longitude}")
+        return True
+        
+    except Exception as e:
+        print(f"Failed to update coordinates for record {record_id}: {str(e)}")
+        return False
