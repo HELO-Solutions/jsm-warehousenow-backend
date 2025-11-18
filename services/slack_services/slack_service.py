@@ -4,76 +4,83 @@ import requests
 
 from warehouse.models import ChannelData, WarehouseData
 
-
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")               
 SLACK_CANVAS_CREATE_URL = "https://slack.com/api/canvases.create"
 
+# Column widths for table alignment
+COLUMN_WIDTHS = {
+    "Warehouse Name": 20,
+    "Tier": 6,
+    "Contact Name": 15,
+    "Email": 25,
+    "Phone": 15,
+    "Website": 20,
+    "Zip Searched": 12,
+    "Radius": 6,
+    "Assigned": 8,
+    "Called?": 8,
+    "Emailed?": 8,
+    "Notes": 15
+}
 
-def join_slack_channel(channel_id: str):
-    url = "https://slack.com/api/conversations.join"
-    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
-    payload = {"channel": channel_id}
 
-    response = requests.post(url, headers=headers, json=payload)
-    data = response.json()
+def pad(value: str, width: int) -> str:
+    """Pad a string with spaces to a fixed width."""
+    value = str(value) if value else ""
+    if len(value) > width - 1:
+        value = value[:width-1] + "…"  # truncate if too long
+    return value.ljust(width)
 
+def join_slack_channel(channel_id: str): 
+
+    url = "https://slack.com/api/conversations.join" 
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"} 
+    payload = {"channel": channel_id} 
+    response = requests.post(url, headers=headers, json=payload) 
+    data = response.json() 
     if not data.get("ok"):
-        # If already in the channel, Slack may return "method_not_supported"
-        if data.get("error") not in ("method_not_supported", "already_in_channel"):
+     # If already in the channel, Slack may return "method_not_supported"
+        if data.get("error") not in ("method_not_supported", "already_in_channel"): 
             raise Exception(f"Failed to join channel: {data}")
-        
-
+    
 def build_combined_canvas_markdown(
     warehouses: List[WarehouseData],
     zip_searched: str,
     radius: str
 ) -> str:
+    """Build Markdown table with padded values for Slack Canvas."""
+    headers = list(COLUMN_WIDTHS.keys())
+    header_row = "| " + " | ".join(pad(h, COLUMN_WIDTHS[h]) for h in headers) + " |"
+    separator_row = "|-" + "-|-".join("-" * COLUMN_WIDTHS[h] for h in headers) + "-|"
 
-    header = (
-        "| Warehouse Name | Tier | Contact Name | Email | Phone | Website | Zip Searched | Radius | Assigned | Called? | Emailed? | Notes |\n"
-        "|----------------|------|--------------|-------|-------|---------|--------------|--------|----------|---------|----------|-------|\n"
-    )
-
-    rows = []
+    rows = [header_row, separator_row]
 
     for w in warehouses:
         f = w.fields
-
-        warehouse_name = f.warehouse_name or ""
-        tier = f.tier or ""
-        contact_name = f.contact_name or ""
-        contact_email = f.contact_email or ""
-        contact_phone = f.office_phone or ""
-        website = f.website or ""
-
-        row = (
-            f"| {warehouse_name} "
-            f"| {tier} "
-            f"| {contact_name} "
-            f"| {contact_email} "
-            f"| {contact_phone} "
-            f"| {website} "
-            f"| {zip_searched} "
-            f"| {radius} "
-            f"|  "  # Assigned
-            f"|  "  # Called?
-            f"|  "  # Emailed?
-            f"|  "  # Notes
-            f"|"
-        )
-
+        row = "| " + " | ".join([
+            pad(f.warehouse_name, COLUMN_WIDTHS["Warehouse Name"]),
+            pad(f.tier, COLUMN_WIDTHS["Tier"]),
+            pad(f.contact_name, COLUMN_WIDTHS["Contact Name"]),
+            pad(f.contact_email, COLUMN_WIDTHS["Email"]),
+            pad(f.office_phone, COLUMN_WIDTHS["Phone"]),
+            pad(f.website, COLUMN_WIDTHS["Website"]),
+            pad(zip_searched, COLUMN_WIDTHS["Zip Searched"]),
+            pad(radius, COLUMN_WIDTHS["Radius"]),
+            pad("", COLUMN_WIDTHS["Assigned"]),
+            pad("", COLUMN_WIDTHS["Called?"]),
+            pad("", COLUMN_WIDTHS["Emailed?"]),
+            pad("", COLUMN_WIDTHS["Notes"]),
+        ]) + " |"
         rows.append(row)
 
-    return header + "\n".join(rows)
+    return "\n".join(rows)
+
 
 def create_slack_canvas(channel_id: str, markdown_content: str, title="Warehouse Details"):
     payload = {
         "title": title,
         "channel_id": channel_id,
-        "document_content": {
-            "type": "markdown",
-            "markdown": markdown_content
-        }
+        "document_content": {"type": "markdown", "markdown": markdown_content}
     }
 
     headers = {
@@ -82,7 +89,6 @@ def create_slack_canvas(channel_id: str, markdown_content: str, title="Warehouse
     }
 
     response = requests.post(SLACK_CANVAS_CREATE_URL, json=payload, headers=headers)
-
     if not response.ok:
         raise Exception(f"Slack Canvas API error: {response.text}")
 
@@ -92,50 +98,34 @@ def create_slack_canvas(channel_id: str, markdown_content: str, title="Warehouse
 
     return result["canvas_id"]
 
-def get_canvas_file_id_and_content(canvas_id: str) -> Tuple[str, str]:
-    """Get the actual canvas file_id and content from canvas_id (which might be a tab ID)."""
-    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
-    existing_markdown = ""
-    file_id = canvas_id
-    
-    # Try to get canvas info using files.info
-    try:
-        files_info_url = "https://slack.com/api/files.info"
-        files_resp = requests.get(files_info_url, headers=headers, params={"file": canvas_id}).json()
-        if files_resp.get("ok"):
-            file_info = files_resp.get("file", {})
-            file_id = file_info.get("id", canvas_id)
-            # Try to get content from file
-            if file_info.get("mimetype") == "application/vnd.slack-docs":
-                # Canvas file - try to get content
-                content = file_info.get("content", "")
-                if content:
-                    existing_markdown = content
-    except Exception:
-        pass
-    
-    # If canvas_id already starts with 'F', assume it's the correct file_id
-    if canvas_id.startswith("F"):
-        file_id = canvas_id
-    
-    return file_id, existing_markdown
 
-def append_to_slack_canvas(canvas_file_id: str, new_markdown: str, existing_markdown: str = ""):
+MAX_CHUNK_SIZE = 1800  # Slack-friendly chunk size
+
+def split_markdown(markdown: str, max_size: int = MAX_CHUNK_SIZE):
+    chunks = []
+    start = 0
+    while start < len(markdown):
+        end = start + max_size
+        chunks.append(markdown[start:end])
+        start = end
+    return chunks
+
+
+def append_to_slack_canvas(canvas_file_id: str, new_markdown: str):
     headers = {
         "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json; charset=utf-8"
     }
 
-    combined_markdown = existing_markdown + ("\n\n---\n\n" if existing_markdown else "") + new_markdown
-
+    # Use insert_at_end operation to append without fetching existing content
     payload = {
         "canvas_id": canvas_file_id,
         "changes": [
             {
-                "operation": "replace",
+                "operation": "insert_at_end",
                 "document_content": {
                     "type": "markdown",
-                    "markdown": combined_markdown
+                    "markdown": "\n\n---\n\n" + new_markdown
                 }
             }
         ]
@@ -145,70 +135,63 @@ def append_to_slack_canvas(canvas_file_id: str, new_markdown: str, existing_mark
     data = response.json()
     if not data.get("ok"):
         raise Exception(f"Slack Canvas update error: {data}")
-    
-    return data
 
-    
-def get_channel_data_by_name(channel_name: str) -> ChannelData:
+    return {"ok": True, "message": "Canvas updated successfully."}
 
-    headers = {
-        "Authorization": f"Bearer {SLACK_BOT_TOKEN}"
-    }
 
-    target = channel_name.lower()
+def get_channel_data_by_request(request_id: str) -> ChannelData:
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+    target = str(request_id)
     channel_types = ["public_channel", "private_channel"]
 
     for ctype in channel_types:
-
         cursor = ""
         while True:
             response = requests.get(
                 "https://slack.com/api/conversations.list",
                 headers=headers,
-                params={
-                    "limit": 1000,
-                    "types": ctype,
-                    "cursor": cursor
-                }
+                params={"limit": 1000, "types": ctype, "cursor": cursor}
             ).json()
 
             if not response.get("ok"):
                 raise Exception(f"Error fetching {ctype}s: {response}")
 
-            # search through these channels
             for ch in response.get("channels", []):
-                canvas_id = None
-                file_id = None
-                tabs = ch.get("properties", {}).get("tabs", [])
-                if tabs:
-                    canvas_id = tabs[0].get("id") 
-                    file_id = tabs[0].get("data", {}).get("file_id")
-                if ch.get("name", "").lower() == target:
-                    channel_data = ChannelData(
+                channel_name = ch.get("name", "").lower()
+                
+                # Check if channel name contains the request_id
+                if f"{target}" in channel_name or channel_name.startswith(f"{target}"):
+                    canvas_id = None
+                    file_id = None
+                    tabs = ch.get("properties", {}).get("tabs", [])
+                    if tabs:
+                        canvas_id = tabs[0].get("id")
+                        file_id = tabs[0].get("data", {}).get("file_id")
+                    
+                    return ChannelData(
                         channel_id=ch["id"],
                         channel_name=ch["name"],
                         canvas_id=canvas_id,
                         file_id=file_id
                     )
-                    return channel_data
 
-            # pagination check
             cursor = response.get("response_metadata", {}).get("next_cursor", "")
             if not cursor:
-                break  # No more pages
+                break
 
     return None
+
 
 def export_warehouse_results_to_slack(
     warehouses: List[WarehouseData],
     zip_searched: str,
     radius: str,
-    channel_name: str
+    request_id: str
 ):
-    channel_data: ChannelData = get_channel_data_by_name(channel_name)
+    channel_data: ChannelData = get_channel_data_by_request(request_id)
     if not channel_data:
         raise Exception(f"Channel not found: {channel_name}")
-    
+
     channel_id = channel_data.channel_id
     canvas_id = channel_data.canvas_id
     file_id = channel_data.file_id
@@ -221,9 +204,13 @@ def export_warehouse_results_to_slack(
         radius=radius
     )
 
-    if canvas_id:
+    if canvas_id and file_id:
         append_to_slack_canvas(file_id, new_table_markdown)
     else:
-        canvas_id = create_slack_canvas(channel_id, new_table_markdown, title=f"Warehouse Search Results ({len(warehouses)} results)")
+        canvas_id = create_slack_canvas(
+            channel_id,
+            new_table_markdown,
+            title=f"Warehouse Search Results ({len(warehouses)} results)"
+        )
 
     return canvas_id
