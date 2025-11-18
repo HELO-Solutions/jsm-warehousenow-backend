@@ -1,6 +1,6 @@
 
 from typing import List, Generic, TypeVar
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class LocationRequest(BaseModel):
     zip_code: str
@@ -19,20 +19,21 @@ class AttachmentFile(BaseModel):
     thumbnails: Optional[dict] = None
     
 class WarehouseFields(BaseModel):
-    warehouse_name: Optional[str] = None
+    warehouse_name: Optional[str] = Field(None, alias="Warehouse Name")
     city: Optional[str] = None
     state: Optional[str] = None
     zip_code: Optional[str] = None
     full_address: Optional[str] = None
     status: Optional[List[str]] = None
-    tier: Optional[str] = None
-    contact_name: Optional[str] = None
-    contact_email: Optional[str] = None
-    office_phone: Optional[str] = None
-    cell_phone: Optional[str] = None
-    contact_2_name: Optional[str] = None
-    contact_2_email: Optional[str] = None
-    contact_2_phone: Optional[str] = None
+    tier: Optional[str] = Field(None, alias="Tier")
+    contact_name: Optional[str] = Field(None, alias="Contact Name")
+    contact_email: Optional[str] = Field(None, alias="Contact Email")
+    office_phone: Optional[str] = Field(None, alias="Office Phone Number")
+    cell_phone: Optional[str] = Field(None, alias="Cell Phone")
+    contact_2_name: Optional[str] = Field(None, alias="Contact 2 Name")
+    contact_2_email: Optional[str] = Field(None, alias="Contact 3 Email Address")
+    contact_2_phone: Optional[str] = Field(None, alias="Contact 2 Office Number")
+    website: Optional[str] = Field(None, alias="Website")
     email_3: Optional[str] = None
     hours_of_operation: Optional[str] = None
     weekends: Optional[str] = None
@@ -50,7 +51,6 @@ class WarehouseFields(BaseModel):
     disposal: Optional[str] = None
     willing_to_order_dumpster: Optional[str] = None
     dumpster_size: Optional[str] = None
-    website: Optional[str] = None
     insurance: Optional[List[AttachmentFile]] = None
     insurance_via_link: Optional[str] = None
     whn_user: Optional[List[str]] = None
@@ -99,6 +99,12 @@ class OrderData(BaseModel):
     commodity: Optional[str] = None
     loading_method: Optional[str] = None
     request_images : list[str] = None
+
+class ChannelData(BaseModel):
+    channel_id: Optional[str] = None
+    channel_name: Optional[str] = None
+    canvas_id: Optional[str] = None
+    file_id: Optional[str] = None
 
 # Coverage Gap Analysis Models
 class StaticWarehouseData(BaseModel):

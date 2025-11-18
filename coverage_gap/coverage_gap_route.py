@@ -4,7 +4,9 @@ from typing import Optional
 from warehouse.models import ResponseModel, CoverageGapRequest, CoverageAnalysisResponse, AIAnalysisData
 from coverage_gap.coverage_gap_service import get_coverage_gap_analysis, get_ai_analysis_only
 
-coverage_gap_router = APIRouter()
+coverage_gap_router = APIRouter(
+        tags=["coverage_gap"] 
+)
 
 
 @coverage_gap_router.post("/coverage_gap_warehouses", response_model=ResponseModel[CoverageAnalysisResponse])

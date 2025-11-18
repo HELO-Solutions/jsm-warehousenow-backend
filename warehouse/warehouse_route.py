@@ -1,17 +1,18 @@
+from typing import List
 from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
-import httpx
-import os
 import time
 
 from services.messaging.email_service import send_bulk_email
-from services.geolocation.geolocation_service import get_coordinates_mapbox, update_airtable_coordinates
-from warehouse.models import LocationRequest, ResponseModel, SendBulkEmailData, SendEmailData
+from services.geolocation.geolocation_service import get_coordinates_google, update_airtable_coordinates
+from services.slack_services.slack_service import export_warehouse_results_to_slack, get_channel_data_by_name
+from warehouse.models import ChannelData, LocationRequest, ResponseModel, SendBulkEmailData, WarehouseData
 from warehouse.warehouse_service import fetch_orders_by_requestid_from_airtable, fetch_orders_from_airtable, fetch_warehouses_from_airtable, find_nearby_warehouses, invalidate_warehouse_cache, get_cache_status
 
 
-warehouse_router = APIRouter()
-
+warehouse_router = APIRouter(
+    tags=["Warehouse"] 
+)
 
 @warehouse_router.get("/warehouses")
 async def warehouses():
@@ -58,6 +59,32 @@ async def find_nearby_warehouses_endpoint(request: LocationRequest):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
+@warehouse_router.post("/search/export")
+async def export_search_to_slack(warehouses: List[WarehouseData], zip: str, radius: str, channel_name: str):
+    """Export the search reasult to slack."""
+    try:
+        canvas_id = export_warehouse_results_to_slack(
+            warehouses=warehouses,
+            zip_searched=zip,
+            radius=radius,
+            channel_name=channel_name
+        )
+        return ResponseModel(status="success", data=canvas_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{str(e)}")
+    
+
+@warehouse_router.post("/channel")
+async def export_search_to_slack(channel_name: str):
+    """Export the search reasult to slack."""
+    try:
+        channel_data: ChannelData = get_channel_data_by_name(channel_name)
+        return ResponseModel(status="success", data=channel_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+
 @warehouse_router.post("/send_email")
 async def send_bulk_email_endpoint(send_bulk_emails: SendBulkEmailData):
     try:
@@ -66,76 +93,30 @@ async def send_bulk_email_endpoint(send_bulk_emails: SendBulkEmailData):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-# Cache management endpoints
-@warehouse_router.post("/cache/refresh")
-async def refresh_cache():
-    """Manually refresh warehouse cache from Airtable."""
-    try:
-        warehouses = await fetch_warehouses_from_airtable(force_refresh=True)
-        return ResponseModel(
-            status="success", 
-            data={
-                "message": "Cache refreshed successfully",
-                "warehouse_count": len(warehouses),
-                "timestamp": time.time()
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cache refresh failed: {str(e)}")
-
-@warehouse_router.delete("/cache/clear")
-async def clear_cache():
-    """Clear all warehouse-related cache."""
-    try:
-        result = await invalidate_warehouse_cache()
-        return ResponseModel(status="success", data=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cache clear failed: {str(e)}")
-
-@warehouse_router.get("/cache/status")
-async def get_cache_status_endpoint():
-    """Get detailed cache status and recommendations."""
-    try:
-        status = await get_cache_status()
-        return ResponseModel(status="success", data=status)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get cache status: {str(e)}")
-
 @warehouse_router.post("/webhook")
 async def airtable_webhook(request: dict):
     """Handle Airtable webhook notifications for real-time cache invalidation and coordinate calculation."""
     try:        
         warehouse_data = request
         
-        # Clear cache when Airtable data changes
         await invalidate_warehouse_cache()
         
-        # Check if coordinates need to be calculated
         zip_code = warehouse_data.get("ZIP")
         record_id = warehouse_data.get("Record ID")
         current_lat = warehouse_data.get("Latitude")
         current_lng = warehouse_data.get("Longitude")
-        
-        # Debug logging
-       
+               
         coordinate_update_result = None
         
-        # Only calculate coordinates if:
-        # 1. Warehouse has a ZIP code
-        # 2. Either latitude or longitude is missing
-        # 3. We have a valid record ID
         if zip_code and record_id and (not current_lat or not current_lng):
             print(f"🔍 Calculating coordinates for warehouse with ZIP: {zip_code}")
             
             try:
-                # Get coordinates using Mapbox API
-                coordinates = get_coordinates_mapbox(zip_code)
+                coordinates = get_coordinates_google(zip_code)
                 
                 if coordinates:
                     lat, lng = coordinates
-                    print(f"📍 Coordinates found: {lat}, {lng}")
                     
-                    # Update Airtable with new coordinates
                     update_success = await update_airtable_coordinates(record_id, lat, lng)
                     coordinate_update_result = {
                         "coordinates_calculated": True,
@@ -144,25 +125,16 @@ async def airtable_webhook(request: dict):
                         "airtable_updated": update_success
                     }
                 else:
-                    print(f"No coordinates found for ZIP: {zip_code}")
                     coordinate_update_result = {
                         "coordinates_calculated": False,
                         "reason": "No coordinates found for ZIP code"
                     }
                     
             except Exception as coord_error:
-                print(f" Coordinate calculation error: {str(coord_error)}")
                 coordinate_update_result = {
                     "coordinates_calculated": False,
                     "error": str(coord_error)
                 }
-        else:
-            if not zip_code:
-                print("No ZIP code provided, skipping coordinate calculation")
-            elif current_lat and current_lng:
-                print("Coordinates already exist, skipping calculation")
-            else:
-                print("No record ID provided, skipping coordinate calculation")
         
         return ResponseModel(
             status="success", 
