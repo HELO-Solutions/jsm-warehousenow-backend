@@ -26,10 +26,9 @@ COLUMN_WIDTHS = {
 
 
 def pad(value: str, width: int) -> str:
-    """Pad a string with spaces to a fixed width."""
     value = str(value) if value else ""
     if len(value) > width - 1:
-        value = value[:width-1] + "…"  # truncate if too long
+        value = value[:width-1]
     return value.ljust(width)
 
 def join_slack_channel(channel_id: str): 
@@ -51,31 +50,49 @@ def build_combined_canvas_markdown(
 ) -> str:
     """Build Markdown table with padded values for Slack Canvas."""
     headers = list(COLUMN_WIDTHS.keys())
-    header_row = "| " + " | ".join(pad(h, COLUMN_WIDTHS[h]) for h in headers) + " |"
-    separator_row = "|-" + "-|-".join("-" * COLUMN_WIDTHS[h] for h in headers) + "-|"
+    
+    # Calculate the maximum width needed for each column
+    # Start with the header width and the defined minimum width
+    actual_widths = {}
+    for h in headers:
+        actual_widths[h] = max(COLUMN_WIDTHS[h], len(h) + 1)
+    
+    # Check all warehouse data to find the maximum width needed
+    for w in warehouses:
+        f = w.fields
+        actual_widths["Warehouse Name"] = max(actual_widths["Warehouse Name"], len(str(f.warehouse_name or "")))
+        actual_widths["Tier"] = max(actual_widths["Tier"], len(str(f.tier or "")))
+        actual_widths["Contact Name"] = max(actual_widths["Contact Name"], len(str(f.contact_name or "")))
+        actual_widths["Email"] = max(actual_widths["Email"], len(str(f.contact_email or "")))
+        actual_widths["Phone"] = max(actual_widths["Phone"], len(str(f.office_phone or "")))
+        actual_widths["Website"] = max(actual_widths["Website"], len(str(f.website or "")))
+        actual_widths["Zip Searched"] = max(actual_widths["Zip Searched"], len(str(zip_searched or "")))
+        actual_widths["Radius"] = max(actual_widths["Radius"], len(str(radius or "")))
+    
+    header_row = "| " + " | ".join(pad(h, actual_widths[h]) for h in headers) + " |"
+    separator_row = "|-" + "-|-".join("-" * actual_widths[h] for h in headers) + "-|"
 
     rows = [header_row, separator_row]
 
     for w in warehouses:
         f = w.fields
         row = "| " + " | ".join([
-            pad(f.warehouse_name, COLUMN_WIDTHS["Warehouse Name"]),
-            pad(f.tier, COLUMN_WIDTHS["Tier"]),
-            pad(f.contact_name, COLUMN_WIDTHS["Contact Name"]),
-            pad(f.contact_email, COLUMN_WIDTHS["Email"]),
-            pad(f.office_phone, COLUMN_WIDTHS["Phone"]),
-            pad(f.website, COLUMN_WIDTHS["Website"]),
-            pad(zip_searched, COLUMN_WIDTHS["Zip Searched"]),
-            pad(radius, COLUMN_WIDTHS["Radius"]),
-            pad("", COLUMN_WIDTHS["Assigned"]),
-            pad("", COLUMN_WIDTHS["Called?"]),
-            pad("", COLUMN_WIDTHS["Emailed?"]),
-            pad("", COLUMN_WIDTHS["Notes"]),
+            pad(f.warehouse_name, actual_widths["Warehouse Name"]),
+            pad(f.tier, actual_widths["Tier"]),
+            pad(f.contact_name, actual_widths["Contact Name"]),
+            pad(f.contact_email, actual_widths["Email"]),
+            pad(f.office_phone, actual_widths["Phone"]),
+            pad(f.website, actual_widths["Website"]),
+            pad(zip_searched, actual_widths["Zip Searched"]),
+            pad(radius, actual_widths["Radius"]),
+            pad("", actual_widths["Assigned"]),
+            pad("", actual_widths["Called?"]),
+            pad("", actual_widths["Emailed?"]),
+            pad("", actual_widths["Notes"]),
         ]) + " |"
         rows.append(row)
 
     return "\n".join(rows)
-
 
 def create_slack_canvas(channel_id: str, markdown_content: str, title="Warehouse Details"):
     payload = {
