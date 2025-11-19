@@ -179,7 +179,10 @@ def get_channel_data_by_request(request_id: str) -> ChannelData:
             if not cursor:
                 break
 
-    return None
+    # No channel found for this request_id
+    raise Exception(
+        f"No Slack channel found for request ID '{request_id}'. "
+    )
 
 
 def export_warehouse_results_to_slack(
