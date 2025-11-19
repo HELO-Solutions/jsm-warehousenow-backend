@@ -60,26 +60,20 @@ async def find_nearby_warehouses_endpoint(request: LocationRequest):
 
 @warehouse_router.post("/search/export")
 async def export_search_to_slack(warehouses: List[WarehouseData], zip: str, radius: str, request_id: str):
-    """Export the search reasult to slack."""
     try:
-        canvas_id = export_warehouse_results_to_slack(
+        canvas_id = await export_warehouse_results_to_slack(
             warehouses=warehouses,
             zip_searched=zip,
             radius=radius,
             request_id=request_id
         )
         return ResponseModel(status="success", data=canvas_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"{str(e)}")
 
-@warehouse_router.post("/channel")
-async def export_search_to_slack(channel_name: str):
-    """Export the search reasult to slack."""
-    try:
-        #channel_data: ChannelData = get_channel_data_by_request(channel_name)
-        return ResponseModel(status="success", data="")
+    except HTTPException:
+        raise
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @warehouse_router.post("/send_email")
 async def send_bulk_email_endpoint(send_bulk_emails: SendBulkEmailData):

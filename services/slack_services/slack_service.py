@@ -1,5 +1,6 @@
 import os
 from typing import List, Tuple
+from fastapi import HTTPException
 import requests
 
 from warehouse.models import ChannelData, WarehouseData
@@ -179,13 +180,13 @@ def get_channel_data_by_request(request_id: str) -> ChannelData:
             if not cursor:
                 break
 
-    # No channel found for this request_id
-    raise Exception(
-        f"No Slack channel found for request ID '{request_id}'. "
-    )
+    raise HTTPException(
+            status_code=400,
+            detail=f"No Slack channel found for request_id={request_id}"
+        )
 
 
-def export_warehouse_results_to_slack(
+async def export_warehouse_results_to_slack(
     warehouses: List[WarehouseData],
     zip_searched: str,
     radius: str,
@@ -193,7 +194,10 @@ def export_warehouse_results_to_slack(
 ):
     channel_data: ChannelData = get_channel_data_by_request(request_id)
     if not channel_data:
-        raise Exception(f"Channel not found: {channel_name}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No Slack channel found for request_id={request_id}"
+        )
 
     channel_id = channel_data.channel_id
     canvas_id = channel_data.canvas_id
