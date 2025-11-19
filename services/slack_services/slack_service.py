@@ -217,7 +217,7 @@ async def export_warehouse_results_to_slack(
         canvas_id = create_slack_canvas(
             channel_id,
             new_table_markdown,
-            title=f"Warehouse Search Results ({len(warehouses)} results)"
+            title=f"Warehouse Search Results"
         )
 
     return canvas_id
