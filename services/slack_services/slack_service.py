@@ -185,6 +185,37 @@ def get_channel_data_by_request(request_id: str) -> ChannelData:
             detail=f"No Slack channel found for request_id={request_id}"
         )
 
+def post_message_to_channel(channel_id: str, message: str, canvas_id: str = None):
+    """Post a message to a Slack channel, optionally with a canvas link."""
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "channel": channel_id,
+        "text": message
+    }
+    
+    if canvas_id:
+        payload["blocks"] = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": message
+                }
+            }
+        ]
+    
+    response = requests.post(url, headers=headers, json=payload)
+    data = response.json()
+    
+    if not data.get("ok"):
+        raise Exception(f"Failed to post message to channel: {data}")
+    
+    return data
 
 async def export_warehouse_results_to_slack(
     warehouses: List[WarehouseData],
@@ -213,11 +244,15 @@ async def export_warehouse_results_to_slack(
 
     if canvas_id and file_id:
         append_to_slack_canvas(file_id, new_table_markdown)
+        message = f"*New warehouse search results added to Canvas.!*\n• Zip Code: {zip_searched}\n• Radius: {radius} miles*\n Please review the records."
+        post_message_to_channel(channel_id, message, file_id)
     else:
         canvas_id = create_slack_canvas(
             channel_id,
             new_table_markdown,
             title=f"Warehouse Search Results"
         )
+        message = f"*New warehouse search results added to Canvas.!*\n• Zip Code: {zip_searched}\n• Radius: {radius} miles*\n Please review the updated records."
+        post_message_to_channel(channel_id, message, canvas_id)
 
     return canvas_id
