@@ -46,7 +46,8 @@ def join_slack_channel(channel_id: str):
 def build_combined_canvas_markdown(
     warehouses: List[WarehouseData],
     zip_searched: str,
-    radius: str
+    radius: str,
+    has_header: bool
 ) -> str:
     """Build Markdown table with padded values for Slack Canvas."""
     headers = list(COLUMN_WIDTHS.keys())
@@ -69,11 +70,20 @@ def build_combined_canvas_markdown(
         actual_widths["Zip Searched"] = max(actual_widths["Zip Searched"], len(str(zip_searched or "")))
         actual_widths["Radius"] = max(actual_widths["Radius"], len(str(radius or "")))
     
-    header_row = "| " + " | ".join(pad(h, actual_widths[h]) for h in headers) + " |"
-    separator_row = "|-" + "-|-".join("-" * actual_widths[h] for h in headers) + "-|"
+    rows = []
+    
+    if has_header:
+        # Include actual column headers
+        header_row = "| " + " | ".join(pad(h, actual_widths[h]) for h in headers) + " |"
+        separator_row = "|-" + "-|-".join("-" * actual_widths[h] for h in headers) + "-|"
+        rows.extend([header_row, separator_row])
+    else:
+        # Include empty header row (invisible) but with separator to maintain table structure
+        empty_header_row = "| " + " | ".join(pad("", actual_widths[h]) for h in headers) + " |"
+        separator_row = "|-" + "-|-".join("-" * actual_widths[h] for h in headers) + "-|"
+        rows.extend([empty_header_row, separator_row])
 
-    rows = [header_row, separator_row]
-
+    # Add data rows (always included regardless of has_header)
     for w in warehouses:
         f = w.fields
         row = "| " + " | ".join([
@@ -143,7 +153,7 @@ def append_to_slack_canvas(canvas_file_id: str, new_markdown: str):
                 "operation": "insert_at_end",
                 "document_content": {
                     "type": "markdown",
-                    "markdown": "\n\n---\n\n" + new_markdown
+                    "markdown": new_markdown
                 }
             }
         ]
@@ -256,7 +266,8 @@ async def export_warehouse_results_to_slack(
     new_table_markdown = build_combined_canvas_markdown(
         warehouses=warehouses,
         zip_searched=zip_searched,
-        radius=radius
+        radius=radius,
+        has_header= not (canvas_id and file_id)
     )
 
     if canvas_id and file_id:
