@@ -273,7 +273,7 @@ async def export_warehouse_results_to_slack(
     if canvas_id and file_id:
         append_to_slack_canvas(file_id, new_table_markdown)
         message = f"*New warehouse search results added to Canvas.!*\n• Zip Code: {zip_searched}\n• Radius: {radius} miles*\n Please review the records."
-        #post_message_to_channel(channel_id, message, file_id)
+        post_message_to_channel(channel_id, message, file_id)
     else:
         canvas_id = create_slack_canvas(
             channel_id,
@@ -281,6 +281,6 @@ async def export_warehouse_results_to_slack(
             title=f"Warehouse Search Results"
         )
         message = f"*New warehouse search results added to Canvas.!*\n• Zip Code: {zip_searched}\n• Radius: {radius} miles*\n Please review the updated records."
-        #post_message_to_channel(channel_id, message, canvas_id)
+        post_message_to_channel(channel_id, message, canvas_id)
 
     return canvas_id
