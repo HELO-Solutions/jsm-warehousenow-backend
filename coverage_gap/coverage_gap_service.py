@@ -324,8 +324,31 @@ def apply_warehouse_filters(warehouses: List['StaticWarehouseData'], filters: 'C
     return filtered
 
 
+def load_us_cities() -> Dict[str, Dict]:
+    """Load all US cities from us_cities.json and return as dict keyed by city,state"""
+    import json
+    
+    try:
+        with open('data/us_cities.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        cities_dict = {}
+        for city_data in data.get('cities', []):
+            city_key = f"{city_data['city']},{city_data['state']}"
+            cities_dict[city_key] = city_data
+        
+        print(f"Loaded {len(cities_dict)} US cities from us_cities.json")
+        return cities_dict
+    except FileNotFoundError:
+        print("Warning: us_cities.json not found. Run generate_us_cities.py first.")
+        return {}
+    except Exception as e:
+        print(f"Error loading US cities: {e}")
+        return {}
+
+
 async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None, radius_miles: Optional[float] = None) -> CoverageAnalysisResponse:
-    """Get comprehensive coverage gap analysis with warehouses (grouped by zipcode or radius)."""
+    """Get comprehensive coverage gap analysis for all US cities with warehouse data where available."""
     
     # Create cache key based on filters and radius
     import json
@@ -343,13 +366,6 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
     if cached:
         print("=== COVERAGE GAP ANALYSIS (CACHED) ===")
         print(f"DEBUG: Cache key: {cache_key}")
-        # Still check for 91761 in cached data for debugging
-        if hasattr(cached, 'coverageAnalysis'):
-            zipcodes_in_cache = [ca.zipCode for ca in cached.coverageAnalysis]
-            if "91761" in zipcodes_in_cache:
-                print(f"DEBUG: Zipcode 91761 found in CACHED response with {len([ca for ca in cached.coverageAnalysis if ca.zipCode == '91761'])} entries")
-            else:
-                print(f"DEBUG: Zipcode 91761 NOT found in CACHED response. Zipcodes in cache: {zipcodes_in_cache[:10]}...")
         return cached
     
     print("=== COVERAGE GAP ANALYSIS STARTED ===")
@@ -382,138 +398,123 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
     average_monthly_requests = await get_average_monthly_requests()
     print(f"Average monthly requests: {average_monthly_requests}")
     
-    # Create coverage analysis with REAL data
-    coverage_analysis = []
+    # Load all US cities
+    print("Loading all US cities...")
+    us_cities = load_us_cities()
     
-    # Group warehouses by zipcode first, then expand with radius if provided
-    print("Grouping warehouses by zipcode")
-    zipcode_analysis = {}
+    # Group warehouses by city
+    print("Grouping warehouses by city")
+    warehouse_city_data = {}
     for warehouse in static_warehouses:
-        zipcode = warehouse.zipCode.strip() if warehouse.zipCode else ""
-        if not zipcode:
-            continue  # Skip warehouses without zip codes
+        city = warehouse.city.strip() if warehouse.city else ""
+        state = warehouse.state.strip() if warehouse.state else ""
+        if not city or not state:
+            continue
         
-        if zipcode not in zipcode_analysis:
-            zipcode_analysis[zipcode] = {
-                "city": warehouse.city,
-                "state": warehouse.state,
-                "zipCode": warehouse.zipCode,
+        city_key = f"{city},{state}"
+        
+        if city_key not in warehouse_city_data:
+            warehouse_city_data[city_key] = {
                 "warehouses": [],
-                "lat": warehouse.lat,
-                "lng": warehouse.lng,
                 "totalRequests": 0
             }
-        zipcode_analysis[zipcode]["warehouses"].append(warehouse)
-        zipcode_analysis[zipcode]["totalRequests"] += warehouse.reqCount
-    
-    # Debug: Check if 91761 exists after initial grouping
-    if "91761" in zipcode_analysis:
-        print(f"DEBUG: Zipcode 91761 found with {len(zipcode_analysis['91761']['warehouses'])} warehouses and {zipcode_analysis['91761']['totalRequests']} requests")
-    else:
-        print(f"DEBUG: Zipcode 91761 NOT found in zipcode_analysis after initial grouping")
-        # Check if any warehouses have zipcode 91761
-        warehouses_91761 = [wh for wh in static_warehouses if wh.zipCode == "91761"]
-        print(f"DEBUG: Found {len(warehouses_91761)} warehouses with zipcode 91761 in static_warehouses")
-    
-    # If radius is provided, expand each zipcode group to include nearby warehouses
-    if radius_miles and radius_miles > 0:
-        print(f"Expanding zipcode groups with radius: {radius_miles} miles")
         
-        # Pre-filter warehouses with valid coordinates to avoid checking invalid ones repeatedly
+        warehouse_city_data[city_key]["warehouses"].append(warehouse)
+        warehouse_city_data[city_key]["totalRequests"] += warehouse.reqCount
+    
+    # If radius is provided, expand ALL cities (including those without warehouses) to include nearby warehouses
+    if radius_miles and radius_miles > 0:
+        print(f"Expanding all cities with radius: {radius_miles} miles")
+        
         valid_warehouses = [wh for wh in static_warehouses if wh.lat != 0 and wh.lng != 0]
         print(f"  Processing {len(valid_warehouses)} warehouses with valid coordinates")
+        print(f"  Checking against {len(us_cities)} US cities")
         
-        # Track which warehouses belong to which zipcodes to avoid duplicates
-        warehouse_zipcode_map = {}
-        for zipcode, data in zipcode_analysis.items():
-            for wh in data["warehouses"]:
-                if wh.id not in warehouse_zipcode_map:
-                    warehouse_zipcode_map[wh.id] = set()
-                warehouse_zipcode_map[wh.id].add(zipcode)
-        
-        # For each zipcode group, find warehouses within radius and add them
-        zipcode_count = len(zipcode_analysis)
-        processed = 0
-        for zipcode, data in zipcode_analysis.items():
-            processed += 1
-            if processed % 50 == 0:
-                print(f"  Processing zipcode {processed}/{zipcode_count}...")
+        # First, expand existing warehouse city groups
+        for city_key, data in warehouse_city_data.items():
+            # Get city coordinates from US cities data or calculate from warehouses
+            city_info = us_cities.get(city_key, {})
+            if city_info and city_info.get('latitude') and city_info.get('longitude'):
+                center_lat = city_info['latitude']
+                center_lng = city_info['longitude']
+            else:
+                # Calculate from warehouses
+                valid_coords = [(wh.lat, wh.lng) for wh in data["warehouses"] 
+                              if wh.lat != 0 and wh.lng != 0]
+                if not valid_coords:
+                    continue
+                center_lat = sum(coord[0] for coord in valid_coords) / len(valid_coords)
+                center_lng = sum(coord[1] for coord in valid_coords) / len(valid_coords)
             
-            # Calculate center point of this zipcode group (average of warehouse locations)
-            valid_coords = [(wh.lat, wh.lng) for wh in data["warehouses"] 
-                          if wh.lat != 0 and wh.lng != 0]
-            if not valid_coords:
-                continue  # Skip if no valid coordinates
-            
-            center_lat = sum(coord[0] for coord in valid_coords) / len(valid_coords)
-            center_lng = sum(coord[1] for coord in valid_coords) / len(valid_coords)
-            
-            # Track which warehouses are already in this zipcode group
             existing_warehouse_ids = {wh.id for wh in data["warehouses"]}
             
-            # Find all warehouses within radius of this zipcode's center
-            # Only check warehouses with valid coordinates
-            added_count = 0
             for warehouse in valid_warehouses:
-                # Skip if warehouse is already in this zipcode group
                 if warehouse.id in existing_warehouse_ids:
                     continue
                 
-                # Calculate distance from zipcode center to warehouse
                 distance = haversine(center_lat, center_lng, warehouse.lat, warehouse.lng)
-                
-                # If within radius, add to this zipcode group
                 if distance <= radius_miles:
                     data["warehouses"].append(warehouse)
                     data["totalRequests"] += warehouse.reqCount
                     existing_warehouse_ids.add(warehouse.id)
-                    added_count += 1
-                    # Track this warehouse in the zipcode map
-                    if warehouse.id not in warehouse_zipcode_map:
-                        warehouse_zipcode_map[warehouse.id] = set()
-                    warehouse_zipcode_map[warehouse.id].add(zipcode)
         
-        print(f"  Radius expansion completed for {zipcode_count} zipcodes")
-    
-    # Debug: Log all zipcodes before creating coverage analysis
-    print(f"DEBUG: Creating coverage analysis for {len(zipcode_analysis)} zipcodes")
-    if "91761" in zipcode_analysis:
-        print(f"DEBUG: Zipcode 91761 will be included in coverage analysis with {len(zipcode_analysis['91761']['warehouses'])} warehouses")
-    
-    # Create coverage analysis for each zipcode with REAL calculations
-    for zipcode, data in zipcode_analysis.items():
-        warehouses_in_zipcode = data["warehouses"]
-        
-        # Count warehouses by tier (REAL data)
-        # Gold count includes both "Gold" and "Potential Gold" tiers
-        gold_count = sum(1 for w in warehouses_in_zipcode if w.tier in ["Gold", "Potential Gold"])
-        silver_count = sum(1 for w in warehouses_in_zipcode if w.tier == "Silver")
-        bronze_count = sum(1 for w in warehouses_in_zipcode if w.tier == "Bronze")
-        # Un-tiered warehouses: empty, null, or not in standard tiers
-        standard_tiers = ["Gold", "Potential Gold", "Silver", "Bronze"]
-        un_tiered_count = sum(1 for w in warehouses_in_zipcode if not w.tier or (isinstance(w.tier, str) and w.tier.strip() == "") or (w.tier not in standard_tiers))
-        
-        # Calculate REAL minimum distance between warehouses in the zipcode
-        min_distance = 0.0  # Default to 0 for single warehouse
-        if len(warehouses_in_zipcode) > 1:
-            min_distance = float('inf')
-            for i, wh1 in enumerate(warehouses_in_zipcode):
-                for wh2 in warehouses_in_zipcode[i+1:]:
-                    if wh1.lat != 0 and wh1.lng != 0 and wh2.lat != 0 and wh2.lng != 0:
-                        distance = haversine(wh1.lat, wh1.lng, wh2.lat, wh2.lng)
-                        min_distance = min(min_distance, distance)
+        # Second, check ALL US cities (including those without warehouses) for nearby warehouses
+        processed = 0
+        for city_key, city_info in us_cities.items():
+            processed += 1
+            if processed % 5000 == 0:
+                print(f"  Processing city {processed}/{len(us_cities)}...")
             
-            # If still infinity (no valid coordinates found), default to 0
-            if min_distance == float('inf'):
-                min_distance = 0.0
+            # Skip if city already has warehouses (already processed above)
+            if city_key in warehouse_city_data:
+                continue
+            
+            # Skip if city has no valid coordinates
+            if not city_info.get('latitude') or not city_info.get('longitude'):
+                continue
+            
+            center_lat = city_info['latitude']
+            center_lng = city_info['longitude']
+            
+            # Check if any warehouses fall within radius of this city
+            nearby_warehouses_for_city = []
+            for warehouse in valid_warehouses:
+                distance = haversine(center_lat, center_lng, warehouse.lat, warehouse.lng)
+                if distance <= radius_miles:
+                    nearby_warehouses_for_city.append(warehouse)
+            
+            # If warehouses found within radius, add them to warehouse_city_data
+            if nearby_warehouses_for_city:
+                warehouse_city_data[city_key] = {
+                    "warehouses": nearby_warehouses_for_city,
+                    "totalRequests": sum(wh.reqCount for wh in nearby_warehouses_for_city)
+                }
         
-        # Create REAL nearby warehouses with actual distances
+        print(f"  Radius expansion completed. Cities with warehouses after expansion: {len(warehouse_city_data)}")
+    
+    # Create coverage analysis for ALL US cities
+    print(f"Creating coverage analysis for all {len(us_cities)} US cities...")
+    coverage_analysis = []
+    
+    for city_key, city_info in us_cities.items():
+        # Get warehouse data for this city if available
+        warehouse_data = warehouse_city_data.get(city_key, {})
+        warehouses_in_city = warehouse_data.get("warehouses", [])
+        total_requests_in_city = warehouse_data.get("totalRequests", 0)
+        
+        # Count warehouses by tier
+        gold_count = sum(1 for w in warehouses_in_city if w.tier in ["Gold", "Potential Gold"])
+        silver_count = sum(1 for w in warehouses_in_city if w.tier == "Silver")
+        bronze_count = sum(1 for w in warehouses_in_city if w.tier == "Bronze")
+        standard_tiers = ["Gold", "Potential Gold", "Silver", "Bronze"]
+        un_tiered_count = sum(1 for w in warehouses_in_city if not w.tier or (isinstance(w.tier, str) and w.tier.strip() == "") or (w.tier not in standard_tiers))
+        
+        # Create nearby warehouses list (top 3)
         nearby_warehouses = []
-        for wh in warehouses_in_zipcode[:3]:  # Top 3 nearby
+        for wh in warehouses_in_city[:3]:
             distance = 0.0
-            if len(warehouses_in_zipcode) > 1:
-                # Calculate average distance to other warehouses in zipcode
-                other_warehouses = [w for w in warehouses_in_zipcode if w.id != wh.id]
+            if len(warehouses_in_city) > 1:
+                other_warehouses = [w for w in warehouses_in_city if w.id != wh.id]
                 if other_warehouses:
                     distances = []
                     for other_wh in other_warehouses:
@@ -529,61 +530,48 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
                 distance=distance
             ))
         
-        # Calculate REAL scores based on actual data
-        warehouse_count = len(warehouses_in_zipcode)
-        total_requests_in_zipcode = data["totalRequests"]
+        warehouse_count = len(warehouses_in_city)
+        avg_requests_per_warehouse = total_requests_in_city / warehouse_count if warehouse_count > 0 else 0
         
-        # Calculate coverage density score based on requests per warehouse
-        avg_requests_per_warehouse = total_requests_in_zipcode / warehouse_count if warehouse_count > 0 else 0
-        coverage_density_score = min(avg_requests_per_warehouse / 10.0, 1.0)  # Normalize by 10 requests per warehouse
-        
-        # Calculate population weighted gap score based on request density
-        # Higher request density with fewer warehouses = higher gap score
-        request_density = total_requests_in_zipcode / warehouse_count if warehouse_count > 0 else total_requests_in_zipcode
-        population_weighted_gap_score = min(request_density / 20.0, 1.0)  # Normalize by 20 requests
-        
-        # Determine expansion opportunity based on REAL metrics
-        # Priority: High > Moderate > None
-        if avg_requests_per_warehouse > 25:  # Very high load per warehouse
+        # Determine expansion opportunity
+        if avg_requests_per_warehouse > 25:
             expansion_opportunity = "High"
-        elif warehouse_count == 1 and total_requests_in_zipcode > 10:
-            expansion_opportunity = "High"  # Single warehouse with high demand
-        elif warehouse_count == 1 and total_requests_in_zipcode > 3:
-            expansion_opportunity = "Moderate"  # Single warehouse with some demand
-        elif warehouse_count < 3 and total_requests_in_zipcode > 15:
-            expansion_opportunity = "Moderate"  # Few warehouses with high demand
-        elif avg_requests_per_warehouse > 15:  # High load per warehouse
+        elif warehouse_count == 1 and total_requests_in_city > 10:
+            expansion_opportunity = "High"
+        elif warehouse_count == 1 and total_requests_in_city > 3:
             expansion_opportunity = "Moderate"
-        elif total_requests_in_zipcode == 0:
-            expansion_opportunity = "None"  # No requests means no expansion needed
+        elif warehouse_count < 3 and total_requests_in_city > 15:
+            expansion_opportunity = "Moderate"
+        elif avg_requests_per_warehouse > 15:
+            expansion_opportunity = "Moderate"
+        elif total_requests_in_city == 0:
+            expansion_opportunity = "None"
         else:
             expansion_opportunity = "None"
         
-        # Calculate warehouses per 100 sq miles based on zipcode area estimation
-        # Estimate zipcode area based on warehouse count and density
-        estimated_zipcode_area_sq_miles = max(warehouse_count * 25, 50)  # Estimate 25 sq miles per warehouse, min 50
-        warehouses_per_100_sq_miles = (warehouse_count / estimated_zipcode_area_sq_miles) * 100
+        # Calculate warehouses per 100 sq miles
+        estimated_city_area_sq_miles = max(warehouse_count * 25, 50)
+        warehouses_per_100_sq_miles = (warehouse_count / estimated_city_area_sq_miles) * 100 if estimated_city_area_sq_miles > 0 else 0
+        
+        # Determine coverage gap
+        has_coverage_gap = warehouse_count < 2 or avg_requests_per_warehouse > 20
         
         coverage_analysis.append(CoverageAnalysis(
-            zipCode=data["zipCode"],
-            city=data["city"],
-            state=data["state"],
-            population=int(50000 + total_requests_in_zipcode * 1000),  # Estimate population based on requests
-            latitude=data["lat"],
-            longitude=data["lng"],
+            city=city_info["city"],
+            state=city_info["state"],
+            latitude=city_info["latitude"],
+            longitude=city_info["longitude"],
+            zipcodes=city_info["zipcodes"],
             nearbyWarehouses=nearby_warehouses,
-            minimumDistance=min_distance,
             warehouseCount=warehouse_count,
-            coverageDensityScore=coverage_density_score,
-            populationWeightedGapScore=population_weighted_gap_score,
-            hasCoverageGap=warehouse_count < 2 or avg_requests_per_warehouse > 20,
+            hasCoverageGap=has_coverage_gap,
             expansionOpportunity=expansion_opportunity,
             goldWarehouseCount=gold_count,
             silverWarehouseCount=silver_count,
             bronzeWarehouseCount=bronze_count,
             unTieredWarehouseCount=un_tiered_count,
             warehousesPer100SqMiles=warehouses_per_100_sq_miles,
-            reqCount=total_requests_in_zipcode  # Total requests for this zipcode
+            reqCount=total_requests_in_city
         ))
     
     result = CoverageAnalysisResponse(
@@ -628,76 +616,38 @@ async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, rad
         static_warehouses = apply_warehouse_filters(static_warehouses, filters)
         print(f"After filtering: {len(static_warehouses)} warehouses for AI analysis")
     
-    # Group warehouses by zipcode first, then expand with radius if provided (same logic as coverage gap)
-    print("Grouping warehouses by zipcode for AI analysis")
-    zipcode_warehouses_dict = {}
+    # Group warehouses by city (NO radius expansion for AI analysis)
+    print("Grouping warehouses by city for AI analysis (no radius expansion)")
+    city_warehouses_dict = {}
     for warehouse in static_warehouses:
-        zipcode = warehouse.zipCode.strip() if warehouse.zipCode else ""
-        if not zipcode:
+        city = warehouse.city.strip() if warehouse.city else ""
+        state = warehouse.state.strip() if warehouse.state else ""
+        if not city or not state:
             continue
         
-        if zipcode not in zipcode_warehouses_dict:
-            zipcode_warehouses_dict[zipcode] = {
+        # Use city+state as composite key to handle cities with same name in different states
+        city_key = f"{city},{state}"
+        
+        if city_key not in city_warehouses_dict:
+            city_warehouses_dict[city_key] = {
                 "city": warehouse.city,
                 "state": warehouse.state,
                 "warehouses": [],
                 "totalRequests": 0
             }
-        zipcode_warehouses_dict[zipcode]["warehouses"].append(warehouse)
-        zipcode_warehouses_dict[zipcode]["totalRequests"] += warehouse.reqCount
+        city_warehouses_dict[city_key]["warehouses"].append(warehouse)
+        city_warehouses_dict[city_key]["totalRequests"] += warehouse.reqCount
     
-    # If radius is provided, expand each zipcode group to include nearby warehouses (same as coverage gap)
-    if radius_miles and radius_miles > 0:
-        print(f"Expanding zipcode groups with radius: {radius_miles} miles for AI analysis")
-        
-        # Pre-filter warehouses with valid coordinates
-        valid_warehouses = [wh for wh in static_warehouses if wh.lat != 0 and wh.lng != 0]
-        print(f"  Processing {len(valid_warehouses)} warehouses with valid coordinates for AI analysis")
-        
-        for zipcode, data in zipcode_warehouses_dict.items():
-            # Calculate center point of this zipcode group
-            valid_coords = [(wh.lat, wh.lng) for wh in data["warehouses"] 
-                          if wh.lat != 0 and wh.lng != 0]
-            if not valid_coords:
-                continue
-            
-            center_lat = sum(coord[0] for coord in valid_coords) / len(valid_coords)
-            center_lng = sum(coord[1] for coord in valid_coords) / len(valid_coords)
-            
-            # Track which warehouses are already in this zipcode group
-            existing_warehouse_ids = {wh.id for wh in data["warehouses"]}
-            
-            # Find all warehouses within radius of this zipcode's center
-            # Only check warehouses with valid coordinates
-            for warehouse in valid_warehouses:
-                if warehouse.id in existing_warehouse_ids:
-                    continue
-                
-                distance = haversine(center_lat, center_lng, warehouse.lat, warehouse.lng)
-                
-                if distance <= radius_miles:
-                    data["warehouses"].append(warehouse)
-                    data["totalRequests"] += warehouse.reqCount
-                    existing_warehouse_ids.add(warehouse.id)
-        
-        print(f"  Radius expansion completed for AI analysis")
+    # Pass the grouped city data (NO radius expansion) directly to AI analysis
+    print(f"Starting AI analysis for {len(city_warehouses_dict)} city groups (no radius expansion)")
     
-    # For AI analysis, pass unique warehouses only to avoid performance issues
-    # Radius expansion creates too many duplicate entries (70k+) which causes the AI function to hang
-    # The coverage gap endpoint still uses radius expansion, but AI analysis uses unique warehouses
+    # Get total unique warehouses for AI prompt
     unique_warehouse_ids = set()
-    unique_warehouses_list = []
-    
-    for zipcode, data in zipcode_warehouses_dict.items():
+    for data in city_warehouses_dict.values():
         for warehouse in data["warehouses"]:
-            if warehouse.id not in unique_warehouse_ids:
-                unique_warehouse_ids.add(warehouse.id)
-                unique_warehouses_list.append(warehouse)
+            unique_warehouse_ids.add(warehouse.id)
     
-    print(f"Starting AI analysis for {len(unique_warehouses_list)} unique warehouses")
-    if radius_miles and radius_miles > 0:
-        print(f"  Note: Radius expansion ({radius_miles} miles) is applied to coverage gap endpoint but not AI analysis to avoid performance issues")
-    ai_analysis = await analyze_coverage_gaps_with_ai(unique_warehouses_list, total_requests)
+    ai_analysis = await analyze_coverage_gaps_with_ai(city_warehouses_dict, total_requests, len(unique_warehouse_ids))
     print(f"AI analysis completed: {len(ai_analysis.coverageGaps)} gaps, {len(ai_analysis.recommendations)} recommendations")
     
     return ai_analysis

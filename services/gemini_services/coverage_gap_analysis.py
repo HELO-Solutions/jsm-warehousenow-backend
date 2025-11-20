@@ -8,7 +8,7 @@ identifying areas where warehouse coverage is insufficient relative to demand.
 import os
 import httpx
 import google.generativeai as genai
-from typing import List
+from typing import List, Dict
 from datetime import datetime, timezone, timedelta
 from warehouse.models import StaticWarehouseData, AIAnalysisData, CoverageGap, HighRequestArea, RequestTrends, Recommendation
 from services.geolocation.geolocation_service import haversine
@@ -17,6 +17,28 @@ from services.geolocation.geolocation_service import haversine
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 BASE_ID = os.getenv("BASE_ID")
 REQUEST_TABLE_NAME = "Requests"
+
+
+def load_us_cities() -> Dict[str, Dict]:
+    """Load all US cities from us_cities.json and return as dict keyed by city,state"""
+    import json
+    
+    try:
+        with open('data/us_cities.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        cities_dict = {}
+        for city_data in data.get('cities', []):
+            city_key = f"{city_data['city']},{city_data['state']}"
+            cities_dict[city_key] = city_data
+        
+        return cities_dict
+    except FileNotFoundError:
+        print("Warning: us_cities.json not found. Run generate_us_cities.py first.")
+        return {}
+    except Exception as e:
+        print(f"Error loading US cities: {e}")
+        return {}
 
 
 async def get_request_trends(total_requests: int) -> RequestTrends:
@@ -106,41 +128,54 @@ async def get_request_trends(total_requests: int) -> RequestTrends:
         )
 
 
-async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], total_requests: int) -> AIAnalysisData:
-    """Analyze coverage gaps using AI specifically for coverage gap analysis."""
+async def analyze_coverage_gaps_with_ai(city_warehouses_dict: Dict[str, Dict], total_requests: int, total_unique_warehouses: int) -> AIAnalysisData:
+    """Analyze coverage gaps using AI specifically for coverage gap analysis.
+    
+    Args:
+        city_warehouses_dict: Pre-grouped city data with warehouses (includes radius expansion)
+        total_requests: Total requests across all warehouses
+        total_unique_warehouses: Total number of unique warehouses (for AI prompt)
+    """
     
     # Check if GEMINI_API_KEY is available
     gemini_key = os.getenv("GEMINI_API_KEY")
     print(f"GEMINI_API_KEY available: {bool(gemini_key)}")
     if not gemini_key:
         print("GEMINI_API_KEY not found, using data-based analysis only")
-        return await analyze_coverage_gaps_without_ai(warehouses, total_requests)
+        return await analyze_coverage_gaps_without_ai(city_warehouses_dict, total_requests)
     
     try:
         genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
         
-        # Prepare warehouse data for AI analysis
+        # Prepare warehouse data for AI analysis (sample from grouped data)
         warehouse_summary = []
-        for wh in warehouses:
-            warehouse_summary.append({
-                "name": wh.name,
-                "city": wh.city,
-                "state": wh.state,
-                "zipCode": wh.zipCode,
-                "tier": wh.tier,
-                "requestCount": wh.reqCount,
-                "hazmat": wh.hazmat,
-                "disposal": wh.disposal,
-                "foodGrade": wh.foodGrade
-            })
+        sample_count = 0
+        for city_key, data in city_warehouses_dict.items():
+            for wh in data["warehouses"]:
+                if sample_count >= 20:
+                    break
+                warehouse_summary.append({
+                    "name": wh.name,
+                    "city": wh.city,
+                    "state": wh.state,
+                    "zipCode": wh.zipCode,
+                    "tier": wh.tier,
+                    "requestCount": wh.reqCount,
+                    "hazmat": wh.hazmat,
+                    "disposal": wh.disposal,
+                    "foodGrade": wh.foodGrade
+                })
+                sample_count += 1
+            if sample_count >= 20:
+                break
         
         # Create AI prompt for coverage gap analysis
         prompt = f"""
         You are a logistics analyst specializing in warehouse coverage optimization. 
         Analyze the following warehouse network data to identify coverage gaps and optimization opportunities.
         
-        Total warehouses: {len(warehouses)}
+        Total warehouses: {total_unique_warehouses}
         Total requests across all warehouses: {total_requests}
         
         Warehouse data (first 20 for analysis):
@@ -166,41 +201,42 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
         ai_response = await model.generate_content_async(prompt)
         ai_text = ai_response.text.strip()
         
-        # Parse AI response and extract structured data from REAL analysis
-        # Group warehouses by zip code
-        zipcode_warehouses = {}
+        # Load US cities data for coordinates and zipcodes
+        us_cities = load_us_cities()
         
-        for wh in warehouses:
-            zipcode = wh.zipCode
-            if not zipcode:
-                continue
+        # Use the pre-grouped city data directly (preserves radius expansion)
+        city_warehouses = {}
+        
+        for city_key, data in city_warehouses_dict.items():
+            # Extract zipcodes from warehouses in this city group
+            zipcodes_set = set()
+            for wh in data["warehouses"]:
+                if wh.zipCode:
+                    zipcodes_set.add(wh.zipCode)
             
-            if zipcode not in zipcode_warehouses:
-                zipcode_warehouses[zipcode] = {
-                    "city": wh.city,
-                    "state": wh.state,
-                    "zipCode": zipcode,
-                    "warehouses": [],
-                    "totalRequests": 0
-                }
-            
-            zipcode_warehouses[zipcode]["warehouses"].append(wh)
-            zipcode_warehouses[zipcode]["totalRequests"] += wh.reqCount
+            city_warehouses[city_key] = {
+                "city": data["city"],
+                "state": data["state"],
+                "zipCodes": zipcodes_set,
+                "warehouses": data["warehouses"],
+                "totalRequests": data["totalRequests"]
+            }
         
         # Coverage Gaps: Areas with less than 3 warehouses within 50 miles
         coverage_gaps = []
         
-        for zipcode, data in zipcode_warehouses.items():
-            # For each warehouse in this zipcode, count how many warehouses are within 50 miles
+        for city_key, data in city_warehouses.items():
+            # For each warehouse in this city, count how many warehouses are within 50 miles
             for warehouse in data["warehouses"]:
                 nearby_count = 1  # Count itself
                 
-                # Count other warehouses within 50 miles
-                for other_zip, other_data in zipcode_warehouses.items():
-                    if zipcode == other_zip:
-                        continue
-                    
+                # Count ALL warehouses within 50 miles (including those in the same city)
+                for other_city_key, other_data in city_warehouses.items():
                     for other_warehouse in other_data["warehouses"]:
+                        # Skip the warehouse itself
+                        if warehouse.id == other_warehouse.id:
+                            continue
+                        
                         # Calculate distance using haversine formula
                         if warehouse.lat != 0 and warehouse.lng != 0 and other_warehouse.lat != 0 and other_warehouse.lng != 0:
                             distance = haversine(
@@ -212,15 +248,17 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
                 
                 # If less than 3 warehouses within 50 miles, this is a coverage gap
                 if nearby_count < 3:
-                    # Check if we already added this zipcode
-                    existing_gap = next((gap for gap in coverage_gaps if gap.zipCode == zipcode), None)
+                    # Check if we already added this city
+                    existing_gap = next((gap for gap in coverage_gaps if gap.city == data["city"] and gap.state == data["state"]), None)
                     if not existing_gap:
-                        # Calculate minimum distance to nearest warehouse
+                        # Calculate minimum distance to nearest warehouse (including same city)
                         min_distance = float('inf')
-                        for other_zip, other_data in zipcode_warehouses.items():
-                            if zipcode == other_zip:
-                                continue
+                        for other_city_key, other_data in city_warehouses.items():
                             for other_warehouse in other_data["warehouses"]:
+                                # Skip the warehouse itself
+                                if warehouse.id == other_warehouse.id:
+                                    continue
+                                
                                 if warehouse.lat != 0 and warehouse.lng != 0 and other_warehouse.lat != 0 and other_warehouse.lng != 0:
                                     distance = haversine(
                                         warehouse.lat, warehouse.lng,
@@ -235,29 +273,45 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
                         requests = data["totalRequests"]
                         gap_score = min(requests / 10.0, 1.0) * (1.0 - (nearby_count / 3.0))
                         
+                        # Get city info from US cities data
+                        city_info = us_cities.get(city_key, {})
+                        city_lat = city_info.get('latitude', 0.0) if city_info else 0.0
+                        city_lng = city_info.get('longitude', 0.0) if city_info else 0.0
+                        city_zipcodes = city_info.get('zipcodes', sorted(data["zipCodes"])) if city_info else sorted(data["zipCodes"])
+                        
                         coverage_gaps.append(CoverageGap(
-                            zipCode=zipcode,
                             city=data["city"],
                             state=data["state"],
+                            latitude=city_lat,
+                            longitude=city_lng,
+                            zipcodes=city_zipcodes if isinstance(city_zipcodes, list) else sorted(data["zipCodes"]),
                             warehouseCount=nearby_count,
                             minimumDistance=min_distance,
                             gapScore=max(gap_score, 0.0)
                         ))
-                        break  # Only add once per zipcode
+                        break  # Only add once per city
         
-        # High Request Areas: Zip codes with the most requests
+        # High Request Areas: Cities with the most requests
         high_request_areas = []
         
-        for zipcode, data in zipcode_warehouses.items():
+        for city_key, data in city_warehouses.items():
             if data["totalRequests"] > 0:  # Only areas with requests
                 # Calculate coverage ratio
                 ideal_warehouses = data["totalRequests"] / 3.0  # 1 warehouse per 3 requests
                 coverage_ratio = len(data["warehouses"]) / ideal_warehouses if ideal_warehouses > 0 else 0
                 
+                # Get city info from US cities data
+                city_info = us_cities.get(city_key, {})
+                city_lat = city_info.get('latitude', 0.0) if city_info else 0.0
+                city_lng = city_info.get('longitude', 0.0) if city_info else 0.0
+                city_zipcodes = city_info.get('zipcodes', sorted(data["zipCodes"])) if city_info else sorted(data["zipCodes"])
+                
                 high_request_areas.append(HighRequestArea(
-                    zipCode=zipcode,
                     city=data["city"],
                     state=data["state"],
+                    latitude=city_lat,
+                    longitude=city_lng,
+                    zipcodes=city_zipcodes if isinstance(city_zipcodes, list) else sorted(data["zipCodes"]),
                     requestCount=data["totalRequests"],
                     warehouseCount=len(data["warehouses"]),
                     coverageRatio=round(coverage_ratio, 2)
@@ -272,24 +326,25 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
         # Calculate REAL request trends based on actual historical data
         request_trends = await get_request_trends(total_requests)
         
-        # Calculate gold warehouse counts per zipcode for correlation insights
-        zipcode_gold_counts = {}
-        zipcode_metrics = {}
-        for zipcode, data in zipcode_warehouses.items():
+        # Calculate gold warehouse counts per city for correlation insights
+        city_gold_counts = {}
+        city_metrics = {}
+        for city_key, data in city_warehouses.items():
             gold_count = sum(1 for w in data["warehouses"] if w.tier in ["Gold", "Potential Gold"])
             silver_count = sum(1 for w in data["warehouses"] if w.tier == "Silver")
             bronze_count = sum(1 for w in data["warehouses"] if w.tier == "Bronze")
             total_warehouses = len(data["warehouses"])
             
-            zipcode_gold_counts[zipcode] = gold_count
-            zipcode_metrics[zipcode] = {
+            city_gold_counts[city_key] = gold_count
+            city_metrics[city_key] = {
                 "gold_count": gold_count,
                 "silver_count": silver_count,
                 "bronze_count": bronze_count,
                 "total_warehouses": total_warehouses,
                 "total_requests": data["totalRequests"],
                 "city": data["city"],
-                "state": data["state"]
+                "state": data["state"],
+                "zipCodes": data["zipCodes"]
             }
         
         # Create REAL recommendations based on actual analysis
@@ -300,8 +355,8 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
             recommendations.append(Recommendation(
                 priority="high",
                 action="Expand warehouse network in underserved areas",
-                targetZipCodes=[gap.zipCode for gap in top_gaps],
-                reasoning=f"Identified {len(coverage_gaps)} areas with less than 3 warehouses within 50 miles"
+                targetCities=[{"city": gap.city, "state": gap.state} for gap in top_gaps],
+                reasoning=f"Identified {len(coverage_gaps)} cities with less than 3 warehouses within 50 miles"
             ))
         
         if high_request_areas:
@@ -310,13 +365,13 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
             recommendations.append(Recommendation(
                 priority="medium",
                 action="Focus on areas with highest request volume",
-                targetZipCodes=[area.zipCode for area in top_request_areas],
-                reasoning=f"Top 10 areas with {sum(area.requestCount for area in top_request_areas)} total requests"
+                targetCities=[{"city": area.city, "state": area.state} for area in top_request_areas],
+                reasoning=f"Top 10 cities with {sum(area.requestCount for area in top_request_areas)} total requests"
             ))
         
-        # 1. DATA QUALITY FLAGS: Identify zip codes with high warehouse count but zero/low gold warehouses
+        # 1. DATA QUALITY FLAGS: Identify cities with high warehouse count but zero/low gold warehouses
         data_quality_issues = []
-        for zipcode, metrics in zipcode_metrics.items():
+        for city_key, metrics in city_metrics.items():
             total_warehouses = metrics["total_warehouses"]
             gold_count = metrics["gold_count"]
             total_requests = metrics["total_requests"]
@@ -324,7 +379,6 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
             # Flag if: 10+ warehouses but 0-1 gold warehouses, OR 5+ warehouses with 0 gold and some requests
             if (total_warehouses >= 10 and gold_count <= 1) or (total_warehouses >= 5 and gold_count == 0 and total_requests > 0):
                 data_quality_issues.append({
-                    "zipcode": zipcode,
                     "city": metrics["city"],
                     "state": metrics["state"],
                     "total_warehouses": total_warehouses,
@@ -338,30 +392,30 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
         if data_quality_issues:
             # Get top 10 data quality issues
             top_quality_issues = data_quality_issues[:10]
-            quality_zipcodes = [issue["zipcode"] for issue in top_quality_issues]
+            quality_cities = [{"city": issue["city"], "state": issue["state"]} for issue in top_quality_issues]
             
             # Build detailed reasoning with examples
             example_issues = []
             for issue in top_quality_issues[:3]:  # Show top 3 examples
                 example_issues.append(
-                    f"{issue['city']} {issue['state']} {issue['zipcode']}: "
+                    f"{issue['city']} {issue['state']}: "
                     f"{issue['total_warehouses']} warehouses, {issue['gold_count']} gold, "
                     f"{issue['total_requests']} requests"
                 )
             
-            reasoning = f"Data quality issue - {len(data_quality_issues)} zip codes with high warehouse count but zero/low gold warehouses. "
+            reasoning = f"Data quality issue - {len(data_quality_issues)} cities with high warehouse count but zero/low gold warehouses. "
             reasoning += "Warehouses need tier evaluation. Examples: " + "; ".join(example_issues)
             
             recommendations.append(Recommendation(
                 priority="medium",
                 action="Data quality issue - warehouses need tier evaluation",
-                targetZipCodes=quality_zipcodes,
+                targetCities=quality_cities,
                 reasoning=reasoning
             ))
         
-        # 2. HIGH REQUEST + LOW COVERAGE CORRELATION: Highlight zip codes with high request volume AND low gold warehouse count
+        # 2. HIGH REQUEST + LOW COVERAGE CORRELATION: Highlight cities with high request volume AND low gold warehouse count
         high_request_low_coverage = []
-        for zipcode, metrics in zipcode_metrics.items():
+        for city_key, metrics in city_metrics.items():
             total_requests = metrics["total_requests"]
             gold_count = metrics["gold_count"]
             silver_count = metrics["silver_count"]
@@ -369,7 +423,6 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
             # Flag if: 10+ requests but 0-2 gold warehouses (high demand, low quality coverage)
             if total_requests >= 10 and gold_count <= 2:
                 high_request_low_coverage.append({
-                    "zipcode": zipcode,
                     "city": metrics["city"],
                     "state": metrics["state"],
                     "total_requests": total_requests,
@@ -384,7 +437,7 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
         if high_request_low_coverage:
             # Get top 10 priority coverage gaps
             top_coverage_gaps = high_request_low_coverage[:10]
-            coverage_gap_zipcodes = [gap["zipcode"] for gap in top_coverage_gaps]
+            coverage_gap_cities = [{"city": gap["city"], "state": gap["state"]} for gap in top_coverage_gaps]
             
             # Build detailed reasoning with examples
             example_gaps = []
@@ -393,27 +446,27 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
                 if gap['silver_count'] > 0:
                     tier_summary += f" + {gap['silver_count']} silver"
                 example_gaps.append(
-                    f"{gap['city']} {gap['state']} {gap['zipcode']}: "
+                    f"{gap['city']} {gap['state']}: "
                     f"{gap['total_requests']} requests, only {tier_summary}"
                 )
             
-            reasoning = f"Priority coverage gap: {len(high_request_low_coverage)} zip codes with high request volume AND low gold warehouse count. "
+            reasoning = f"Priority coverage gap: {len(high_request_low_coverage)} cities with high request volume AND low gold warehouse count. "
             reasoning += "Examples: " + "; ".join(example_gaps)
             
             recommendations.append(Recommendation(
                 priority="high",
                 action="Priority coverage gap: High requests with low gold warehouse coverage",
-                targetZipCodes=coverage_gap_zipcodes,
+                targetCities=coverage_gap_cities,
                 reasoning=reasoning
             ))
         
-        # 3. REQUEST VOLUME VS GOLD AVAILABILITY: Show recommended zip codes based on request-to-gold ratio
+        # 3. REQUEST VOLUME VS GOLD AVAILABILITY: Show recommended cities based on request-to-gold ratio
         request_to_gold_ratios = []
-        for zipcode, metrics in zipcode_metrics.items():
+        for city_key, metrics in city_metrics.items():
             total_requests = metrics["total_requests"]
             gold_count = metrics["gold_count"]
             
-            # Only consider zipcodes with requests and warehouses
+            # Only consider cities with requests and warehouses
             if total_requests > 0 and metrics["total_warehouses"] > 0:
                 # Calculate request-to-gold ratio (higher = more requests per gold warehouse)
                 if gold_count > 0:
@@ -423,7 +476,6 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
                     ratio = total_requests * 10  # Penalize lack of gold warehouses
                 
                 request_to_gold_ratios.append({
-                    "zipcode": zipcode,
                     "city": metrics["city"],
                     "state": metrics["state"],
                     "total_requests": total_requests,
@@ -438,7 +490,7 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
         if request_to_gold_ratios:
             # Get top 10 areas with highest request-to-gold ratio
             top_ratio_areas = request_to_gold_ratios[:10]
-            ratio_zipcodes = [area["zipcode"] for area in top_ratio_areas]
+            ratio_cities = [{"city": area["city"], "state": area["state"]} for area in top_ratio_areas]
             
             # Calculate recommended additional gold warehouses
             recommended_gold_warehouses = []
@@ -454,18 +506,18 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
                     recommended = max(1, recommended)  # At least 1
                 
                 recommended_gold_warehouses.append(
-                    f"{area['city']} {area['state']} {area['zipcode']}: "
+                    f"{area['city']} {area['state']}: "
                     f"{area['total_requests']} requests, {area['gold_count']} gold → "
                     f"recommend {recommended} additional gold-tier warehouse(s)"
                 )
             
-            reasoning = f"Request volume vs gold availability: {len(request_to_gold_ratios)} areas where requests significantly outpace quality warehouse availability. "
+            reasoning = f"Request volume vs gold availability: {len(request_to_gold_ratios)} cities where requests significantly outpace quality warehouse availability. "
             reasoning += "Consider recruiting additional gold-tier warehouses. Examples: " + "; ".join(recommended_gold_warehouses)
             
             recommendations.append(Recommendation(
                 priority="high",
                 action="Consider recruiting additional gold-tier warehouses in high-request areas",
-                targetZipCodes=ratio_zipcodes,
+                targetCities=ratio_cities,
                 reasoning=reasoning
             ))
         
@@ -489,45 +541,52 @@ async def analyze_coverage_gaps_with_ai(warehouses: List[StaticWarehouseData], t
         )
 
 
-async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData], total_requests: int) -> AIAnalysisData:
-    """Analyze coverage gaps using data analysis only (no AI)."""
+async def analyze_coverage_gaps_without_ai(city_warehouses_dict: Dict[str, Dict], total_requests: int) -> AIAnalysisData:
+    """Analyze coverage gaps using data analysis only (no AI).
     
-    print(f"Running data-based analysis for {len(warehouses)} warehouses with {total_requests} total requests")
+    Args:
+        city_warehouses_dict: Pre-grouped city data with warehouses (includes radius expansion)
+        total_requests: Total requests across all warehouses
+    """
     
-    # Group warehouses by zip code (same logic as AI version)
-    zipcode_warehouses = {}
+    print(f"Running data-based analysis for {len(city_warehouses_dict)} city groups with {total_requests} total requests")
     
-    for wh in warehouses:
-        zipcode = wh.zipCode
-        if not zipcode:
-            continue
+    # Load US cities data for coordinates and zipcodes
+    us_cities = load_us_cities()
+    
+    # Use the pre-grouped city data directly (preserves radius expansion)
+    city_warehouses = {}
+    
+    for city_key, data in city_warehouses_dict.items():
+        # Extract zipcodes from warehouses in this city group
+        zipcodes_set = set()
+        for wh in data["warehouses"]:
+            if wh.zipCode:
+                zipcodes_set.add(wh.zipCode)
         
-        if zipcode not in zipcode_warehouses:
-            zipcode_warehouses[zipcode] = {
-                "city": wh.city,
-                "state": wh.state,
-                "zipCode": zipcode,
-                "warehouses": [],
-                "totalRequests": 0
-            }
-        
-        zipcode_warehouses[zipcode]["warehouses"].append(wh)
-        zipcode_warehouses[zipcode]["totalRequests"] += wh.reqCount
+        city_warehouses[city_key] = {
+            "city": data["city"],
+            "state": data["state"],
+            "zipCodes": zipcodes_set,
+            "warehouses": data["warehouses"],
+            "totalRequests": data["totalRequests"]
+        }
     
     # Coverage Gaps: Areas with less than 3 warehouses within 50 miles
     coverage_gaps = []
     
-    for zipcode, data in zipcode_warehouses.items():
-        # For each warehouse in this zipcode, count how many warehouses are within 50 miles
+    for city_key, data in city_warehouses.items():
+        # For each warehouse in this city, count how many warehouses are within 50 miles
         for warehouse in data["warehouses"]:
             nearby_count = 1  # Count itself
             
-            # Count other warehouses within 50 miles
-            for other_zip, other_data in zipcode_warehouses.items():
-                if zipcode == other_zip:
-                    continue
-                
+            # Count ALL warehouses within 50 miles (including those in the same city)
+            for other_city_key, other_data in city_warehouses.items():
                 for other_warehouse in other_data["warehouses"]:
+                    # Skip the warehouse itself
+                    if warehouse.id == other_warehouse.id:
+                        continue
+                    
                     # Calculate distance using haversine formula
                     if warehouse.lat != 0 and warehouse.lng != 0 and other_warehouse.lat != 0 and other_warehouse.lng != 0:
                         distance = haversine(
@@ -539,15 +598,17 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
             
             # If less than 3 warehouses within 50 miles, this is a coverage gap
             if nearby_count < 3:
-                # Check if we already added this zipcode
-                existing_gap = next((gap for gap in coverage_gaps if gap.zipCode == zipcode), None)
+                # Check if we already added this city
+                existing_gap = next((gap for gap in coverage_gaps if gap.city == data["city"] and gap.state == data["state"]), None)
                 if not existing_gap:
-                    # Calculate minimum distance to nearest warehouse
+                    # Calculate minimum distance to nearest warehouse (including same city)
                     min_distance = float('inf')
-                    for other_zip, other_data in zipcode_warehouses.items():
-                        if zipcode == other_zip:
-                            continue
+                    for other_city_key, other_data in city_warehouses.items():
                         for other_warehouse in other_data["warehouses"]:
+                            # Skip the warehouse itself
+                            if warehouse.id == other_warehouse.id:
+                                continue
+                            
                             if warehouse.lat != 0 and warehouse.lng != 0 and other_warehouse.lat != 0 and other_warehouse.lng != 0:
                                 distance = haversine(
                                     warehouse.lat, warehouse.lng,
@@ -562,29 +623,45 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
                     requests = data["totalRequests"]
                     gap_score = min(requests / 10.0, 1.0) * (1.0 - (nearby_count / 3.0))
                     
+                    # Get city info from US cities data
+                    city_info = us_cities.get(city_key, {})
+                    city_lat = city_info.get('latitude', 0.0) if city_info else 0.0
+                    city_lng = city_info.get('longitude', 0.0) if city_info else 0.0
+                    city_zipcodes = city_info.get('zipcodes', sorted(data["zipCodes"])) if city_info else sorted(data["zipCodes"])
+                    
                     coverage_gaps.append(CoverageGap(
-                        zipCode=zipcode,
                         city=data["city"],
                         state=data["state"],
+                        latitude=city_lat,
+                        longitude=city_lng,
+                        zipcodes=city_zipcodes if isinstance(city_zipcodes, list) else sorted(data["zipCodes"]),
                         warehouseCount=nearby_count,
                         minimumDistance=min_distance,
                         gapScore=max(gap_score, 0.0)
                     ))
-                    break  # Only add once per zipcode
+                    break  # Only add once per city
     
-    # High Request Areas: Zip codes with the most requests
+    # High Request Areas: Cities with the most requests
     high_request_areas = []
     
-    for zipcode, data in zipcode_warehouses.items():
+    for city_key, data in city_warehouses.items():
         if data["totalRequests"] > 0:  # Only areas with requests
             # Calculate coverage ratio
             ideal_warehouses = data["totalRequests"] / 3.0  # 1 warehouse per 3 requests
             coverage_ratio = len(data["warehouses"]) / ideal_warehouses if ideal_warehouses > 0 else 0
             
+            # Get city info from US cities data
+            city_info = us_cities.get(city_key, {})
+            city_lat = city_info.get('latitude', 0.0) if city_info else 0.0
+            city_lng = city_info.get('longitude', 0.0) if city_info else 0.0
+            city_zipcodes = city_info.get('zipcodes', sorted(data["zipCodes"])) if city_info else sorted(data["zipCodes"])
+            
             high_request_areas.append(HighRequestArea(
-                zipCode=zipcode,
                 city=data["city"],
                 state=data["state"],
+                latitude=city_lat,
+                longitude=city_lng,
+                zipcodes=city_zipcodes if isinstance(city_zipcodes, list) else sorted(data["zipCodes"]),
                 requestCount=data["totalRequests"],
                 warehouseCount=len(data["warehouses"]),
                 coverageRatio=round(coverage_ratio, 2)
@@ -599,22 +676,23 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
     # Calculate REAL request trends based on actual historical data
     request_trends = await get_request_trends(total_requests)
     
-    # Calculate gold warehouse counts per zipcode for correlation insights
-    zipcode_metrics = {}
-    for zipcode, data in zipcode_warehouses.items():
+    # Calculate gold warehouse counts per city for correlation insights
+    city_metrics = {}
+    for city_key, data in city_warehouses.items():
         gold_count = sum(1 for w in data["warehouses"] if w.tier in ["Gold", "Potential Gold"])
         silver_count = sum(1 for w in data["warehouses"] if w.tier == "Silver")
         bronze_count = sum(1 for w in data["warehouses"] if w.tier == "Bronze")
         total_warehouses = len(data["warehouses"])
         
-        zipcode_metrics[zipcode] = {
+        city_metrics[city_key] = {
             "gold_count": gold_count,
             "silver_count": silver_count,
             "bronze_count": bronze_count,
             "total_warehouses": total_warehouses,
             "total_requests": data["totalRequests"],
             "city": data["city"],
-            "state": data["state"]
+            "state": data["state"],
+            "zipCodes": data["zipCodes"]
         }
     
     # Create REAL recommendations based on actual analysis
@@ -625,8 +703,8 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
         recommendations.append(Recommendation(
             priority="high",
             action="Expand warehouse network in underserved areas",
-            targetZipCodes=[gap.zipCode for gap in top_gaps],
-            reasoning=f"Identified {len(coverage_gaps)} areas with less than 3 warehouses within 50 miles"
+            targetCities=[{"city": gap.city, "state": gap.state} for gap in top_gaps],
+            reasoning=f"Identified {len(coverage_gaps)} cities with less than 3 warehouses within 50 miles"
         ))
     
     if high_request_areas:
@@ -635,13 +713,13 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
         recommendations.append(Recommendation(
             priority="medium",
             action="Focus on areas with highest request volume",
-            targetZipCodes=[area.zipCode for area in top_request_areas],
-            reasoning=f"Top 10 areas with {sum(area.requestCount for area in top_request_areas)} total requests"
+            targetCities=[{"city": area.city, "state": area.state} for area in top_request_areas],
+            reasoning=f"Top 10 cities with {sum(area.requestCount for area in top_request_areas)} total requests"
         ))
     
-    # 1. DATA QUALITY FLAGS: Identify zip codes with high warehouse count but zero/low gold warehouses
+    # 1. DATA QUALITY FLAGS: Identify cities with high warehouse count but zero/low gold warehouses
     data_quality_issues = []
-    for zipcode, metrics in zipcode_metrics.items():
+    for city_key, metrics in city_metrics.items():
         total_warehouses = metrics["total_warehouses"]
         gold_count = metrics["gold_count"]
         total_requests = metrics["total_requests"]
@@ -649,7 +727,6 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
         # Flag if: 10+ warehouses but 0-1 gold warehouses, OR 5+ warehouses with 0 gold and some requests
         if (total_warehouses >= 10 and gold_count <= 1) or (total_warehouses >= 5 and gold_count == 0 and total_requests > 0):
             data_quality_issues.append({
-                "zipcode": zipcode,
                 "city": metrics["city"],
                 "state": metrics["state"],
                 "total_warehouses": total_warehouses,
@@ -663,30 +740,30 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
     if data_quality_issues:
         # Get top 10 data quality issues
         top_quality_issues = data_quality_issues[:10]
-        quality_zipcodes = [issue["zipcode"] for issue in top_quality_issues]
+        quality_cities = [{"city": issue["city"], "state": issue["state"]} for issue in top_quality_issues]
         
         # Build detailed reasoning with examples
         example_issues = []
         for issue in top_quality_issues[:3]:  # Show top 3 examples
             example_issues.append(
-                f"{issue['city']} {issue['state']} {issue['zipcode']}: "
+                f"{issue['city']} {issue['state']}: "
                 f"{issue['total_warehouses']} warehouses, {issue['gold_count']} gold, "
                 f"{issue['total_requests']} requests"
             )
         
-        reasoning = f"Data quality issue - {len(data_quality_issues)} zip codes with high warehouse count but zero/low gold warehouses. "
+        reasoning = f"Data quality issue - {len(data_quality_issues)} cities with high warehouse count but zero/low gold warehouses. "
         reasoning += "Warehouses need tier evaluation. Examples: " + "; ".join(example_issues)
         
         recommendations.append(Recommendation(
             priority="medium",
             action="Data quality issue - warehouses need tier evaluation",
-            targetZipCodes=quality_zipcodes,
+            targetCities=quality_cities,
             reasoning=reasoning
         ))
     
-    # 2. HIGH REQUEST + LOW COVERAGE CORRELATION: Highlight zip codes with high request volume AND low gold warehouse count
+    # 2. HIGH REQUEST + LOW COVERAGE CORRELATION: Highlight cities with high request volume AND low gold warehouse count
     high_request_low_coverage = []
-    for zipcode, metrics in zipcode_metrics.items():
+    for city_key, metrics in city_metrics.items():
         total_requests = metrics["total_requests"]
         gold_count = metrics["gold_count"]
         silver_count = metrics["silver_count"]
@@ -694,7 +771,6 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
         # Flag if: 10+ requests but 0-2 gold warehouses (high demand, low quality coverage)
         if total_requests >= 10 and gold_count <= 2:
             high_request_low_coverage.append({
-                "zipcode": zipcode,
                 "city": metrics["city"],
                 "state": metrics["state"],
                 "total_requests": total_requests,
@@ -709,7 +785,7 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
     if high_request_low_coverage:
         # Get top 10 priority coverage gaps
         top_coverage_gaps = high_request_low_coverage[:10]
-        coverage_gap_zipcodes = [gap["zipcode"] for gap in top_coverage_gaps]
+        coverage_gap_cities = [{"city": gap["city"], "state": gap["state"]} for gap in top_coverage_gaps]
         
         # Build detailed reasoning with examples
         example_gaps = []
@@ -718,44 +794,43 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
             if gap['silver_count'] > 0:
                 tier_summary += f" + {gap['silver_count']} silver"
             example_gaps.append(
-                f"{gap['city']} {gap['state']} {gap['zipcode']}: "
+                f"{gap['city']} {gap['state']}: "
                 f"{gap['total_requests']} requests, only {tier_summary}"
             )
         
-        reasoning = f"Priority coverage gap: {len(high_request_low_coverage)} zip codes with high request volume AND low gold warehouse count. "
+        reasoning = f"Priority coverage gap: {len(high_request_low_coverage)} cities with high request volume AND low gold warehouse count. "
         reasoning += "Examples: " + "; ".join(example_gaps)
         
         recommendations.append(Recommendation(
             priority="high",
             action="Priority coverage gap: High requests with low gold warehouse coverage",
-            targetZipCodes=coverage_gap_zipcodes,
+            targetCities=coverage_gap_cities,
             reasoning=reasoning
         ))
     
-    # 3. REQUEST VOLUME VS GOLD AVAILABILITY: Show recommended zip codes based on request-to-gold ratio
-    request_to_gold_ratios = []
-    for zipcode, metrics in zipcode_metrics.items():
-        total_requests = metrics["total_requests"]
-        gold_count = metrics["gold_count"]
-        
-        # Only consider zipcodes with requests and warehouses
-        if total_requests > 0 and metrics["total_warehouses"] > 0:
-            # Calculate request-to-gold ratio (higher = more requests per gold warehouse)
-            if gold_count > 0:
-                ratio = total_requests / gold_count
-            else:
-                # If no gold warehouses, use a high ratio to prioritize
-                ratio = total_requests * 10  # Penalize lack of gold warehouses
+        # 3. REQUEST VOLUME VS GOLD AVAILABILITY: Show recommended cities based on request-to-gold ratio
+        request_to_gold_ratios = []
+        for city_key, metrics in city_metrics.items():
+            total_requests = metrics["total_requests"]
+            gold_count = metrics["gold_count"]
             
-            request_to_gold_ratios.append({
-                "zipcode": zipcode,
-                "city": metrics["city"],
-                "state": metrics["state"],
-                "total_requests": total_requests,
-                "gold_count": gold_count,
-                "ratio": ratio,
-                "total_warehouses": metrics["total_warehouses"]
-            })
+            # Only consider cities with requests and warehouses
+            if total_requests > 0 and metrics["total_warehouses"] > 0:
+                # Calculate request-to-gold ratio (higher = more requests per gold warehouse)
+                if gold_count > 0:
+                    ratio = total_requests / gold_count
+                else:
+                    # If no gold warehouses, use a high ratio to prioritize
+                    ratio = total_requests * 10  # Penalize lack of gold warehouses
+                
+                request_to_gold_ratios.append({
+                    "city": metrics["city"],
+                    "state": metrics["state"],
+                    "total_requests": total_requests,
+                    "gold_count": gold_count,
+                    "ratio": ratio,
+                    "total_warehouses": metrics["total_warehouses"]
+                })
     
     # Sort by ratio (highest first) - areas where requests significantly outpace gold availability
     request_to_gold_ratios.sort(key=lambda x: x["ratio"], reverse=True)
@@ -763,7 +838,7 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
     if request_to_gold_ratios:
         # Get top 10 areas with highest request-to-gold ratio
         top_ratio_areas = request_to_gold_ratios[:10]
-        ratio_zipcodes = [area["zipcode"] for area in top_ratio_areas]
+        ratio_cities = [{"city": area["city"], "state": area["state"]} for area in top_ratio_areas]
         
         # Calculate recommended additional gold warehouses
         recommended_gold_warehouses = []
@@ -779,18 +854,18 @@ async def analyze_coverage_gaps_without_ai(warehouses: List[StaticWarehouseData]
                 recommended = max(1, recommended)  # At least 1
             
             recommended_gold_warehouses.append(
-                f"{area['city']} {area['state']} {area['zipcode']}: "
+                f"{area['city']} {area['state']}: "
                 f"{area['total_requests']} requests, {area['gold_count']} gold → "
                 f"recommend {recommended} additional gold-tier warehouse(s)"
             )
         
-        reasoning = f"Request volume vs gold availability: {len(request_to_gold_ratios)} areas where requests significantly outpace quality warehouse availability. "
+        reasoning = f"Request volume vs gold availability: {len(request_to_gold_ratios)} cities where requests significantly outpace quality warehouse availability. "
         reasoning += "Consider recruiting additional gold-tier warehouses. Examples: " + "; ".join(recommended_gold_warehouses)
         
         recommendations.append(Recommendation(
             priority="high",
             action="Consider recruiting additional gold-tier warehouses in high-request areas",
-            targetZipCodes=ratio_zipcodes,
+            targetCities=ratio_cities,
             reasoning=reasoning
         ))
     

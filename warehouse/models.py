@@ -1,5 +1,5 @@
 
-from typing import List, Generic, TypeVar
+from typing import List, Generic, TypeVar, Dict
 from pydantic import BaseModel, Field
 
 class LocationRequest(BaseModel):
@@ -127,17 +127,21 @@ class StaticWarehouseData(BaseModel):
     reqCount: int  # Number of requests for this warehouse
 
 class CoverageGap(BaseModel):
-    zipCode: str
     city: str
     state: str
+    latitude: float
+    longitude: float
+    zipcodes: List[str]  # All zipcodes in this city
     warehouseCount: int
     minimumDistance: float
     gapScore: float
 
 class HighRequestArea(BaseModel):
-    zipCode: str
     city: str
     state: str
+    latitude: float
+    longitude: float
+    zipcodes: List[str]  # All zipcodes in this city
     requestCount: int
     warehouseCount: int
     coverageRatio: float
@@ -150,7 +154,7 @@ class RequestTrends(BaseModel):
 class Recommendation(BaseModel):
     priority: str  # 'high' | 'medium' | 'low'
     action: str
-    targetZipCodes: List[str]
+    targetCities: List[Dict[str, str]]  # List of {"city": "...", "state": "..."} objects
     reasoning: str
 
 class AIAnalysisData(BaseModel):
@@ -166,17 +170,13 @@ class MockWarehouse(BaseModel):
     distance: float
 
 class CoverageAnalysis(BaseModel):
-    zipCode: str
     city: str
     state: str
-    population: int
     latitude: float
     longitude: float
+    zipcodes: List[str]  # All zipcodes in this city
     nearbyWarehouses: List[MockWarehouse]
-    minimumDistance: float
     warehouseCount: int
-    coverageDensityScore: float
-    populationWeightedGapScore: float
     hasCoverageGap: bool
     expansionOpportunity: str  # 'None' | 'Moderate' | 'High'
     # New fields for tier-specific counts
@@ -186,7 +186,7 @@ class CoverageAnalysis(BaseModel):
     unTieredWarehouseCount: int  # Warehouses without a tier value
     # New field for warehouses per 100 sq miles
     warehousesPer100SqMiles: float
-    reqCount: int  # Total requests for this zipcode
+    reqCount: int  # Total requests for this city
 
 class CoverageAnalysisResponse(BaseModel):
     warehouses: List[StaticWarehouseData]
