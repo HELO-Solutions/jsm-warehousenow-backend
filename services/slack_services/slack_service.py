@@ -31,16 +31,62 @@ def pad(value: str, width: int) -> str:
         value = value[:width-1]
     return value.ljust(width)
 
-def join_slack_channel(channel_id: str): 
+def is_bot_in_channel(channel_id: str) -> bool:
+    """Check if bot is already a member of the channel."""
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+    response = requests.get(
+        "https://slack.com/api/conversations.info",
+        headers=headers,
+        params={"channel": channel_id}
+    ).json()
+    
+    if response.get("ok"):
+        return response.get("channel", {}).get("is_member", False)
+    return False
 
+def is_bot_in_channel(channel_id: str) -> bool:
+    """Check if bot is already a member of the channel."""
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+    response = requests.get(
+        "https://slack.com/api/conversations.info",
+        headers=headers,
+        params={"channel": channel_id}
+    ).json()
+    
+    if response.get("ok"):
+        return response.get("channel", {}).get("is_member", False)
+    return False
+
+def join_slack_channel(channel_id: str): 
+    # First check if we're already in the channel
+    if is_bot_in_channel(channel_id):
+        print(f"Bot is already a member of channel {channel_id}")
+        return
+    
+    # Try to join (works for public channels only)
     url = "https://slack.com/api/conversations.join" 
     headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"} 
     payload = {"channel": channel_id} 
     response = requests.post(url, headers=headers, json=payload) 
     data = response.json() 
+    
     if not data.get("ok"):
-     # If already in the channel, Slack may return "method_not_supported"
-        if data.get("error") not in ("method_not_supported", "already_in_channel"): 
+        error = data.get("error", "")
+        acceptable_errors = [
+            "method_not_supported", 
+            "already_in_channel", 
+            "is_archived",
+            "method_not_supported_for_channel_type"
+        ]
+        
+        if error == "method_not_supported_for_channel_type":
+            # This is a private channel - check if we're a member
+            if not is_bot_in_channel(channel_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Bot is not a member of this private channel. Please invite the bot to the channel using '/invite @BotName'"
+                )
+        elif error not in acceptable_errors:
             raise Exception(f"Failed to join channel: {data}")
     
 def build_combined_canvas_markdown(
@@ -172,49 +218,93 @@ def append_to_slack_canvas(canvas_file_id: str, new_markdown: str, zip_searched:
 
 def get_channel_data_by_request(request_id: str) -> ChannelData:
     headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
-    target = str(request_id)
-    channel_types = ["public_channel", "private_channel"]
+    target = str(request_id).lower() 
+    
+    found_private_channel_without_bot = False
+    private_channel_name = None
+    all_channels = []
+    
+    # Fetch public channels
+    cursor = ""
+    while True:
+        response = requests.get(
+            "https://slack.com/api/conversations.list",
+            headers=headers,
+            params={
+                "limit": 1000, 
+                "types": "public_channel",
+                "cursor": cursor,
+                "exclude_archived": True 
+            }
+        ).json()
 
-    for ctype in channel_types:
-        cursor = ""
-        while True:
-            response = requests.get(
-                "https://slack.com/api/conversations.list",
-                headers=headers,
-                params={"limit": 1000, "types": ctype, "cursor": cursor}
-            ).json()
-
-            if not response.get("ok"):
-                raise Exception(f"Error fetching {ctype}s: {response}")
-
-            for ch in response.get("channels", []):
-                channel_name = ch.get("name", "").lower()
-                
-                # Check if channel name contains the request_id
-                if f"{target}" in channel_name or channel_name.startswith(f"{target}"):
-                    canvas_id = None
-                    file_id = None
-                    tabs = ch.get("properties", {}).get("tabs", [])
-                    if tabs:
-                        canvas_id = tabs[0].get("id")
-                        file_id = tabs[0].get("data", {}).get("file_id")
-                    
-                    return ChannelData(
-                        channel_id=ch["id"],
-                        channel_name=ch["name"],
-                        canvas_id=canvas_id,
-                        file_id=file_id
-                    )
-
+        if response.get("ok"):
+            all_channels.extend(response.get("channels", []))
             cursor = response.get("response_metadata", {}).get("next_cursor", "")
             if not cursor:
                 break
+        else:
+            print(f"Error fetching public channels: {response}")
+            break
+    
+    # Fetch private channels (only those bot is a member of)
+    cursor = ""
+    while True:
+        response = requests.get(
+            "https://slack.com/api/conversations.list",
+            headers=headers,
+            params={
+                "limit": 1000, 
+                "types": "private_channel",
+                "cursor": cursor,
+                "exclude_archived": True 
+            }
+        ).json()
 
-    raise HTTPException(
-            status_code=400,
-            detail=f"No Slack channel found for request_id={request_id}"
+        if response.get("ok"):
+            all_channels.extend(response.get("channels", []))
+            cursor = response.get("response_metadata", {}).get("next_cursor", "")
+            if not cursor:
+                break
+        else:
+            error = response.get("error", "")
+            if error in ("missing_scope", "not_authed"):
+                print(f"Warning: Missing 'groups:read' scope for private channels. Bot can only see private channels it's a member of.")
+            break
+    
+    # Now search through all collected channels
+    for ch in all_channels:
+        channel_name = ch.get("name", "").lower()
+        is_private = ch.get("is_private", False)
+        is_member = ch.get("is_member", False)
+        
+        # Check if channel name starts with target and hyphen/underscore
+        if channel_name.startswith(f"{target}-"):
+            # Found a matching channel
+            if is_private and not is_member:
+                continue 
+            
+            # Bot is a member or it's public
+            canvas_id = None
+            file_id = None
+            tabs = ch.get("properties", {}).get("tabs", [])
+            if tabs:
+                canvas_id = tabs[0].get("id")
+                file_id = tabs[0].get("data", {}).get("file_id")
+            
+            return ChannelData(
+                channel_id=ch["id"],
+                channel_name=ch["name"],
+                canvas_id=canvas_id,
+                file_id=file_id
+            )
+
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Slack channel found for request_id={request_id}', Please invite the Bot if the channel exits and is private."
         )
-
+    
 def post_message_to_channel(channel_id: str, message: str, canvas_id: str = None):
     """Post a message to a Slack channel, optionally with a canvas link."""
     url = "https://slack.com/api/chat.postMessage"
