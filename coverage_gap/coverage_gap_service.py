@@ -22,6 +22,7 @@ from warehouse.models import (
 )
 from services.gemini_services.coverage_gap_analysis import analyze_coverage_gaps_with_ai
 from services.geolocation.geolocation_service import haversine
+from coverage_gap.coverage_gap_precache import get_precache_key, PRECACHED_RADII
 
 load_dotenv()
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
@@ -371,6 +372,21 @@ async def get_coverage_gap_analysis_stream(
         return f"data: {json.dumps({'type': 'error', 'message': error})}\n\n"
     
     try:
+        # STEP 1: Check pre-cached results (if no filters and radius matches)
+        # Normalize radius to float for comparison
+        if not filters and radius_miles is not None:
+            radius_float = float(radius_miles)
+            if radius_float in PRECACHED_RADII:
+                precache_key = get_precache_key(radius_float)
+                precached = _cache.get(precache_key)
+                if precached:
+                    print("=== COVERAGE GAP ANALYSIS (PRECACHED) ===")
+                    print(f"DEBUG: Pre-cache key: {precache_key}")
+                    yield format_log("Using pre-cached results", 100)
+                    yield format_data(precached)
+                    return
+        
+        # STEP 2: Check regular cache (existing logic)
         # Create cache key based on filters and radius
         if filters:
             filter_dict = filters.model_dump(exclude_none=True, exclude_unset=True)
@@ -663,6 +679,19 @@ async def get_coverage_gap_analysis_stream(
 async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None, radius_miles: Optional[float] = None) -> CoverageAnalysisResponse:
     """Get comprehensive coverage gap analysis for all US cities with warehouse data where available."""
     
+    # STEP 1: Check pre-cached results (if no filters and radius matches)
+    # Normalize radius to float for comparison
+    if not filters and radius_miles is not None:
+        radius_float = float(radius_miles)
+        if radius_float in PRECACHED_RADII:
+            precache_key = get_precache_key(radius_float)
+            precached = _cache.get(precache_key)
+            if precached:
+                print("=== COVERAGE GAP ANALYSIS (PRECACHED) ===")
+                print(f"DEBUG: Pre-cache key: {precache_key}")
+                return precached
+    
+    # STEP 2: Check regular cache (existing logic)
     # Create cache key based on filters and radius
     import json
     if filters:
@@ -901,10 +930,19 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
     return result
 
 
-async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, radius_miles: Optional[float] = None) -> AIAnalysisData:
-    """Get only AI analysis for coverage gaps."""
+async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None) -> AIAnalysisData:
+    """Get only AI analysis for coverage gaps.
+    
+    Always applies 25-mile radius expansion after grouping by cities.
+    This ensures all sections (coverage gaps, high request areas, etc.) 
+    use the expanded warehouse data.
+    """
     
     print("=== AI ANALYSIS STARTED ===")
+    
+    # Always use 25 miles radius for AI analysis
+    radius_miles = 25.0
+    print(f"Using 25-mile radius expansion for AI analysis")
     
     # Get all warehouses
     warehouses_data = await fetch_warehouses_from_airtable()
@@ -929,8 +967,12 @@ async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, rad
         static_warehouses = apply_warehouse_filters(static_warehouses, filters)
         print(f"After filtering: {len(static_warehouses)} warehouses for AI analysis")
     
-    # Group warehouses by city (NO radius expansion for AI analysis)
-    print("Grouping warehouses by city for AI analysis (no radius expansion)")
+    # Load all US cities for radius expansion
+    us_cities = load_us_cities()
+    print(f"Loaded {len(us_cities)} US cities for radius expansion")
+    
+    # Group warehouses by city first
+    print("Grouping warehouses by city for AI analysis")
     city_warehouses_dict = {}
     for warehouse in static_warehouses:
         city = warehouse.city.strip() if warehouse.city else ""
@@ -951,8 +993,82 @@ async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, rad
         city_warehouses_dict[city_key]["warehouses"].append(warehouse)
         city_warehouses_dict[city_key]["totalRequests"] += warehouse.reqCount
     
-    # Pass the grouped city data (NO radius expansion) directly to AI analysis
-    print(f"Starting AI analysis for {len(city_warehouses_dict)} city groups (no radius expansion)")
+    print(f"Grouped warehouses into {len(city_warehouses_dict)} cities before radius expansion")
+    
+    # Apply radius expansion (default 25 miles)
+    if radius_miles and radius_miles > 0:
+        print(f"Expanding cities with radius: {radius_miles} miles")
+        
+        valid_warehouses = [wh for wh in static_warehouses if wh.lat != 0 and wh.lng != 0]
+        print(f"  Processing {len(valid_warehouses)} warehouses with valid coordinates")
+        print(f"  Checking against {len(us_cities)} US cities")
+        
+        # First, expand existing warehouse city groups
+        for city_key, data in city_warehouses_dict.items():
+            # Get city coordinates from US cities data or calculate from warehouses
+            city_info = us_cities.get(city_key, {})
+            if city_info and city_info.get('latitude') and city_info.get('longitude'):
+                center_lat = city_info['latitude']
+                center_lng = city_info['longitude']
+            else:
+                # Calculate from warehouses
+                valid_coords = [(wh.lat, wh.lng) for wh in data["warehouses"] 
+                              if wh.lat != 0 and wh.lng != 0]
+                if not valid_coords:
+                    continue
+                center_lat = sum(coord[0] for coord in valid_coords) / len(valid_coords)
+                center_lng = sum(coord[1] for coord in valid_coords) / len(valid_coords)
+            
+            existing_warehouse_ids = {wh.id for wh in data["warehouses"]}
+            
+            for warehouse in valid_warehouses:
+                if warehouse.id in existing_warehouse_ids:
+                    continue
+                
+                distance = haversine(center_lat, center_lng, warehouse.lat, warehouse.lng)
+                if distance <= radius_miles:
+                    data["warehouses"].append(warehouse)
+                    data["totalRequests"] += warehouse.reqCount
+                    existing_warehouse_ids.add(warehouse.id)
+        
+        # Second, check ALL US cities (including those without warehouses) for nearby warehouses
+        processed = 0
+        for city_key, city_info in us_cities.items():
+            processed += 1
+            if processed % 5000 == 0:
+                print(f"  Processing city {processed}/{len(us_cities)}...")
+            
+            # Skip if city already has warehouses (already processed above)
+            if city_key in city_warehouses_dict:
+                continue
+            
+            # Skip if city has no valid coordinates
+            if not city_info.get('latitude') or not city_info.get('longitude'):
+                continue
+            
+            center_lat = city_info['latitude']
+            center_lng = city_info['longitude']
+            
+            # Check if any warehouses fall within radius of this city
+            nearby_warehouses_for_city = []
+            for warehouse in valid_warehouses:
+                distance = haversine(center_lat, center_lng, warehouse.lat, warehouse.lng)
+                if distance <= radius_miles:
+                    nearby_warehouses_for_city.append(warehouse)
+            
+            # If warehouses found within radius, add them to city_warehouses_dict
+            if nearby_warehouses_for_city:
+                city_warehouses_dict[city_key] = {
+                    "city": city_info["city"],
+                    "state": city_info["state"],
+                    "warehouses": nearby_warehouses_for_city,
+                    "totalRequests": sum(wh.reqCount for wh in nearby_warehouses_for_city)
+                }
+        
+        print(f"  Radius expansion completed. Cities with warehouses after expansion: {len(city_warehouses_dict)}")
+    
+    # Pass the grouped city data (with radius expansion) to AI analysis
+    print(f"Starting AI analysis for {len(city_warehouses_dict)} city groups (with {radius_miles} mile radius expansion)")
     
     # Get total unique warehouses for AI prompt
     unique_warehouse_ids = set()

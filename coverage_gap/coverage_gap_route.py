@@ -4,6 +4,7 @@ from typing import Optional
 
 from warehouse.models import ResponseModel, CoverageGapRequest, CoverageAnalysisResponse, AIAnalysisData
 from coverage_gap.coverage_gap_service import get_coverage_gap_analysis, get_coverage_gap_analysis_stream, get_ai_analysis_only
+from coverage_gap.coverage_gap_precache import precache_all_radii
 
 coverage_gap_router = APIRouter(
         tags=["coverage_gap"] 
@@ -47,14 +48,14 @@ async def coverage_gap_warehouses(
 
 @coverage_gap_router.post("/ai_analysis", response_model=ResponseModel[AIAnalysisData])
 async def ai_analysis(
-    request: CoverageGapRequest = CoverageGapRequest(),
-    radius: Optional[float] = None
+    request: CoverageGapRequest = CoverageGapRequest()
 ):
     """
     Get AI analysis for coverage gaps, trends, and recommendations.
     
-    Query parameters:
-    - radius: Radius in miles for grouping nearby warehouses (default: groups by zipcode only)
+    After grouping warehouses by city, automatically applies 25-mile radius expansion
+    to include nearby warehouses. This affects all sections: coverage gaps, high request areas,
+    and recommendations.
     
     Accepts optional filters in request body to filter warehouses by tier, state, city, etc.
     
@@ -65,7 +66,7 @@ async def ai_analysis(
     - AI-generated recommendations
     """
     try:
-        data = await get_ai_analysis_only(request.filters, radius)
+        data = await get_ai_analysis_only(request.filters)
         return ResponseModel(
             status="success",
             data=data
@@ -73,4 +74,27 @@ async def ai_analysis(
     except Exception as e:
         print(f"Error in AI analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+
+
+@coverage_gap_router.post("/coverage_gap/precache")
+async def trigger_precache():
+    """
+    Manually trigger pre-cache job for all configured radius values.
+    This endpoint allows admins to manually refresh pre-cached results.
+    
+    Returns:
+    - Status of pre-cache job for each radius (25, 50, 100, 500 miles)
+    """
+    try:
+        results = await precache_all_radii()
+        return ResponseModel(
+            status="success",
+            data={
+                "message": "Pre-cache job completed",
+                "results": results
+            }
+        )
+    except Exception as e:
+        print(f"Error in pre-cache job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Pre-cache failed: {str(e)}")
 
