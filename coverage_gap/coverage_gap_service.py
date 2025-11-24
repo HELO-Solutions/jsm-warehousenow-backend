@@ -4,7 +4,8 @@ Provides comprehensive coverage gap analysis and AI-powered recommendations.
 """
 
 import os
-from typing import List, Optional, Dict, Any
+import json
+from typing import List, Optional, Dict, Any, AsyncGenerator
 from datetime import datetime, timezone
 import math
 import httpx
@@ -345,6 +346,318 @@ def load_us_cities() -> Dict[str, Dict]:
     except Exception as e:
         print(f"Error loading US cities: {e}")
         return {}
+
+
+async def get_coverage_gap_analysis_stream(
+    filters: Optional[CoverageGapFilters] = None, 
+    radius_miles: Optional[float] = None
+) -> AsyncGenerator[str, None]:
+    """Get comprehensive coverage gap analysis with streaming progress updates via SSE."""
+    
+    def format_log(message: str, progress: Optional[float] = None) -> str:
+        """Helper to format SSE log messages"""
+        log_data = {"type": "log", "message": message}
+        if progress is not None:
+            log_data["progress"] = progress
+        return f"data: {json.dumps(log_data)}\n\n"
+    
+    def format_data(data: CoverageAnalysisResponse) -> str:
+        """Helper to format final result"""
+        # Use model_dump with mode='json' to ensure proper serialization
+        return f"data: {json.dumps({'type': 'data', 'data': data.model_dump(mode='json')})}\n\n"
+    
+    def format_error(error: str) -> str:
+        """Helper to format error message"""
+        return f"data: {json.dumps({'type': 'error', 'message': error})}\n\n"
+    
+    try:
+        # Create cache key based on filters and radius
+        if filters:
+            filter_dict = filters.model_dump(exclude_none=True, exclude_unset=True)
+            filter_key = json.dumps(filter_dict, sort_keys=True)
+        else:
+            filter_key = "no_filters"
+        
+        radius_key = f"_radius_{radius_miles}" if radius_miles else "_no_radius"
+        cache_key = f"coverage_gap:{filter_key}{radius_key}"
+        
+        # Check cache first
+        cached = _cache.get(cache_key)
+        if cached:
+            print("=== COVERAGE GAP ANALYSIS (CACHED) ===")
+            print(f"DEBUG: Cache key: {cache_key}")
+            yield format_log("Using cached results")
+            yield format_data(cached)
+            return
+        
+        print("=== COVERAGE GAP ANALYSIS STARTED ===")
+        print(f"DEBUG: Cache key: {cache_key}")
+        
+        # Step 1: Fetch warehouses
+        yield format_log("Fetching warehouses from Airtable...", 5)
+        warehouses_data = await fetch_warehouses_from_airtable()
+        print(f"Fetched {len(warehouses_data)} warehouses from Airtable")
+        yield format_log(f"Fetched {len(warehouses_data)} warehouses from Airtable", 10)
+        
+        # Step 2: Get total requests count
+        yield format_log("Calculating total request count...", 12)
+        total_requests = await get_total_requests_count()
+        print(f"Total requests: {total_requests}")
+        yield format_log(f"Total requests: {total_requests}", 20)
+        
+        # Step 3: Get warehouse request counts
+        yield format_log("Fetching request counts per warehouse...", 22)
+        warehouse_request_counts = await get_warehouse_request_counts()
+        print(f"Fetched request counts for {len(warehouse_request_counts)} warehouses")
+        yield format_log(f"Fetched request counts for {len(warehouse_request_counts)} warehouses", 30)
+        
+        # Step 4: Transform warehouses
+        yield format_log("Transforming warehouse data...", 32)
+        static_warehouses = []
+        for idx, warehouse_record in enumerate(warehouses_data):
+            warehouse_id = warehouse_record.get("id", "")
+            request_count = warehouse_request_counts.get(warehouse_id, 0)
+            static_warehouse = transform_warehouse_to_static_data(warehouse_record, request_count)
+            static_warehouses.append(static_warehouse)
+            if (idx + 1) % 500 == 0:
+                yield format_log(f"Transformed {idx + 1}/{len(warehouses_data)} warehouses...", 32 + int((idx + 1) / len(warehouses_data) * 6))
+        print(f"Transformed {len(static_warehouses)} warehouses")
+        yield format_log(f"Transformed {len(static_warehouses)} warehouses", 40)
+        
+        # Step 5: Apply filters if provided
+        if filters:
+            print(f"Applying filters: {filters}")
+            yield format_log(f"Applying filters: {filters}", 42)
+            static_warehouses = apply_warehouse_filters(static_warehouses, filters)
+            print(f"After filtering: {len(static_warehouses)} warehouses")
+            yield format_log(f"After filtering: {len(static_warehouses)} warehouses remain", 45)
+        
+        # Step 6: Get average monthly requests
+        yield format_log("Calculating average monthly requests...", 47)
+        average_monthly_requests = await get_average_monthly_requests()
+        print(f"Average monthly requests: {average_monthly_requests}")
+        yield format_log(f"Average monthly requests: {average_monthly_requests}", 50)
+        
+        # Step 7: Load all US cities
+        print("Loading all US cities...")
+        yield format_log("Loading all US cities from database...", 52)
+        us_cities = load_us_cities()
+        print(f"Loaded {len(us_cities)} US cities from us_cities.json")
+        yield format_log(f"Loaded {len(us_cities)} US cities from database", 55)
+        
+        # Step 8: Group warehouses by city
+        print("Grouping warehouses by city")
+        yield format_log("Grouping warehouses by city...", 57)
+        warehouse_city_data = {}
+        for warehouse in static_warehouses:
+            city = warehouse.city.strip() if warehouse.city else ""
+            state = warehouse.state.strip() if warehouse.state else ""
+            if not city or not state:
+                continue
+            
+            city_key = f"{city},{state}"
+            
+            if city_key not in warehouse_city_data:
+                warehouse_city_data[city_key] = {
+                    "warehouses": [],
+                    "totalRequests": 0
+                }
+            
+            warehouse_city_data[city_key]["warehouses"].append(warehouse)
+            warehouse_city_data[city_key]["totalRequests"] += warehouse.reqCount
+        print(f"Grouped warehouses into {len(warehouse_city_data)} cities")
+        yield format_log(f"Grouped warehouses into {len(warehouse_city_data)} cities", 60)
+        
+        # Step 9: Radius expansion if provided
+        if radius_miles and radius_miles > 0:
+            print(f"Expanding all cities with radius: {radius_miles} miles")
+            yield format_log(f"Expanding coverage with {radius_miles} mile radius...", 62)
+            
+            valid_warehouses = [wh for wh in static_warehouses if wh.lat != 0 and wh.lng != 0]
+            print(f"  Processing {len(valid_warehouses)} warehouses with valid coordinates")
+            print(f"  Checking against {len(us_cities)} US cities")
+            yield format_log(f"Processing {len(valid_warehouses)} warehouses against {len(us_cities)} cities...", 65)
+            
+            # First, expand existing warehouse city groups
+            yield format_log("Expanding existing warehouse cities...", 67)
+            for city_key, data in warehouse_city_data.items():
+                # Get city coordinates from US cities data or calculate from warehouses
+                city_info = us_cities.get(city_key, {})
+                if city_info and city_info.get('latitude') and city_info.get('longitude'):
+                    center_lat = city_info['latitude']
+                    center_lng = city_info['longitude']
+                else:
+                    # Calculate from warehouses
+                    valid_coords = [(wh.lat, wh.lng) for wh in data["warehouses"] 
+                                  if wh.lat != 0 and wh.lng != 0]
+                    if not valid_coords:
+                        continue
+                    center_lat = sum(coord[0] for coord in valid_coords) / len(valid_coords)
+                    center_lng = sum(coord[1] for coord in valid_coords) / len(valid_coords)
+                
+                existing_warehouse_ids = {wh.id for wh in data["warehouses"]}
+                
+                for warehouse in valid_warehouses:
+                    if warehouse.id in existing_warehouse_ids:
+                        continue
+                    
+                    distance = haversine(center_lat, center_lng, warehouse.lat, warehouse.lng)
+                    if distance <= radius_miles:
+                        data["warehouses"].append(warehouse)
+                        data["totalRequests"] += warehouse.reqCount
+                        existing_warehouse_ids.add(warehouse.id)
+            
+            # Second, check ALL US cities (including those without warehouses) for nearby warehouses
+            processed = 0
+            total_cities = len(us_cities)
+            yield format_log(f"Checking all {total_cities} US cities for nearby warehouses...", 70)
+            
+            for city_key, city_info in us_cities.items():
+                processed += 1
+                if processed % 5000 == 0:
+                    progress = 70 + int((processed / total_cities) * 20)  # 70-90% range
+                    print(f"  Processing city {processed}/{total_cities}...")
+                    yield format_log(f"Processing city {processed}/{total_cities}...", progress)
+                
+                # Skip if city already has warehouses (already processed above)
+                if city_key in warehouse_city_data:
+                    continue
+                
+                # Skip if city has no valid coordinates
+                if not city_info.get('latitude') or not city_info.get('longitude'):
+                    continue
+                
+                center_lat = city_info['latitude']
+                center_lng = city_info['longitude']
+                
+                # Check if any warehouses fall within radius of this city
+                nearby_warehouses_for_city = []
+                for warehouse in valid_warehouses:
+                    distance = haversine(center_lat, center_lng, warehouse.lat, warehouse.lng)
+                    if distance <= radius_miles:
+                        nearby_warehouses_for_city.append(warehouse)
+                
+                # If warehouses found within radius, add them to warehouse_city_data
+                if nearby_warehouses_for_city:
+                    warehouse_city_data[city_key] = {
+                        "warehouses": nearby_warehouses_for_city,
+                        "totalRequests": sum(wh.reqCount for wh in nearby_warehouses_for_city)
+                    }
+            
+            print(f"  Radius expansion completed. Cities with warehouses after expansion: {len(warehouse_city_data)}")
+            yield format_log(f"Radius expansion completed. {len(warehouse_city_data)} cities now have warehouses", 90)
+        
+        # Step 10: Create coverage analysis for ALL US cities
+        print(f"Creating coverage analysis for all {len(us_cities)} US cities...")
+        yield format_log(f"Creating coverage analysis for all {len(us_cities)} US cities...", 92)
+        coverage_analysis = []
+        
+        processed_cities = 0
+        for city_key, city_info in us_cities.items():
+            processed_cities += 1
+            if processed_cities % 5000 == 0:
+                progress = 92 + int((processed_cities / len(us_cities)) * 6)  # 92-98% range
+                yield format_log(f"Analyzing city {processed_cities}/{len(us_cities)}...", progress)
+            
+            # Get warehouse data for this city if available
+            warehouse_data = warehouse_city_data.get(city_key, {})
+            warehouses_in_city = warehouse_data.get("warehouses", [])
+            total_requests_in_city = warehouse_data.get("totalRequests", 0)
+            
+            # Count warehouses by tier
+            gold_count = sum(1 for w in warehouses_in_city if w.tier in ["Gold", "Potential Gold"])
+            silver_count = sum(1 for w in warehouses_in_city if w.tier == "Silver")
+            bronze_count = sum(1 for w in warehouses_in_city if w.tier == "Bronze")
+            standard_tiers = ["Gold", "Potential Gold", "Silver", "Bronze"]
+            un_tiered_count = sum(1 for w in warehouses_in_city if not w.tier or (isinstance(w.tier, str) and w.tier.strip() == "") or (w.tier not in standard_tiers))
+            
+            # Create nearby warehouses list (top 3)
+            nearby_warehouses = []
+            for wh in warehouses_in_city[:3]:
+                distance = 0.0
+                if len(warehouses_in_city) > 1:
+                    other_warehouses = [w for w in warehouses_in_city if w.id != wh.id]
+                    if other_warehouses:
+                        distances = []
+                        for other_wh in other_warehouses:
+                            if wh.lat != 0 and wh.lng != 0 and other_wh.lat != 0 and other_wh.lng != 0:
+                                dist = haversine(wh.lat, wh.lng, other_wh.lat, other_wh.lng)
+                                distances.append(dist)
+                        distance = sum(distances) / len(distances) if distances else 0.0
+                
+                nearby_warehouses.append(MockWarehouse(
+                    id=wh.id,
+                    name=wh.name,
+                    tier=wh.tier,
+                    distance=distance
+                ))
+            
+            warehouse_count = len(warehouses_in_city)
+            avg_requests_per_warehouse = total_requests_in_city / warehouse_count if warehouse_count > 0 else 0
+            
+            # Determine expansion opportunity
+            if avg_requests_per_warehouse > 25:
+                expansion_opportunity = "High"
+            elif warehouse_count == 1 and total_requests_in_city > 10:
+                expansion_opportunity = "High"
+            elif warehouse_count == 1 and total_requests_in_city > 3:
+                expansion_opportunity = "Moderate"
+            elif warehouse_count < 3 and total_requests_in_city > 15:
+                expansion_opportunity = "Moderate"
+            elif avg_requests_per_warehouse > 15:
+                expansion_opportunity = "Moderate"
+            elif total_requests_in_city == 0:
+                expansion_opportunity = "None"
+            else:
+                expansion_opportunity = "None"
+            
+            # Calculate warehouses per 100 sq miles
+            estimated_city_area_sq_miles = max(warehouse_count * 25, 50)
+            warehouses_per_100_sq_miles = (warehouse_count / estimated_city_area_sq_miles) * 100 if estimated_city_area_sq_miles > 0 else 0
+            
+            # Determine coverage gap
+            has_coverage_gap = warehouse_count < 2 or avg_requests_per_warehouse > 20
+            
+            coverage_analysis.append(CoverageAnalysis(
+                city=city_info["city"],
+                state=city_info["state"],
+                latitude=city_info["latitude"],
+                longitude=city_info["longitude"],
+                zipcodes=city_info["zipcodes"],
+                nearbyWarehouses=nearby_warehouses,
+                warehouseCount=warehouse_count,
+                hasCoverageGap=has_coverage_gap,
+                expansionOpportunity=expansion_opportunity,
+                goldWarehouseCount=gold_count,
+                silverWarehouseCount=silver_count,
+                bronzeWarehouseCount=bronze_count,
+                unTieredWarehouseCount=un_tiered_count,
+                warehousesPer100SqMiles=warehouses_per_100_sq_miles,
+                reqCount=total_requests_in_city
+            ))
+        
+        # Step 11: Build final result
+        yield format_log("Finalizing results...", 98)
+        result = CoverageAnalysisResponse(
+            warehouses=static_warehouses,
+            coverageAnalysis=coverage_analysis,
+            average_number_of_requests=average_monthly_requests,
+            totalWarehouses=len(static_warehouses),
+            totalRequests=total_requests,
+            analysisRadius=radius_miles if radius_miles else 50
+        )
+        
+        # Cache the result for 30 minutes
+        _cache.set(cache_key, result, ttl=1800)
+        
+        yield format_log("Analysis complete!", 100)
+        yield format_data(result)
+        
+    except Exception as e:
+        error_msg = f"Coverage gap analysis failed: {str(e)}"
+        print(f"Error in coverage gap analysis: {error_msg}")
+        yield format_error(error_msg)
+        raise
 
 
 async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None, radius_miles: Optional[float] = None) -> CoverageAnalysisResponse:

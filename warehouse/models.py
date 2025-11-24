@@ -1,5 +1,5 @@
 
-from typing import List, Generic, TypeVar, Dict
+from typing import List, Generic, TypeVar
 from pydantic import BaseModel, Field
 
 class LocationRequest(BaseModel):
@@ -7,7 +7,7 @@ class LocationRequest(BaseModel):
     radius_miles: float = 50 
 
 
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel
 
 class AttachmentFile(BaseModel):
@@ -139,17 +139,18 @@ class CoverageGap(BaseModel):
     state: str
     latitude: float
     longitude: float
-    zipcodes: List[str]  # All zipcodes in this city
+    zipcodes: List[str]
     warehouseCount: int
     minimumDistance: float
     gapScore: float
+    requestCount: int  # Total requests for this city
 
 class HighRequestArea(BaseModel):
     city: str
     state: str
     latitude: float
     longitude: float
-    zipcodes: List[str]  # All zipcodes in this city
+    zipcodes: List[str]
     requestCount: int
     warehouseCount: int
     coverageRatio: float
@@ -162,7 +163,7 @@ class RequestTrends(BaseModel):
 class Recommendation(BaseModel):
     priority: str  # 'high' | 'medium' | 'low'
     action: str
-    targetCities: List[Dict[str, str]]  # List of {"city": "...", "state": "..."} objects
+    targetCities: List[Dict[str, str]]  # List of {"city": "...", "state": "..."}
     reasoning: str
 
 class AIAnalysisData(BaseModel):

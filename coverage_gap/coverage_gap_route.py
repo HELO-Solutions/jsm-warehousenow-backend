@@ -1,37 +1,44 @@
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import Optional
 
 from warehouse.models import ResponseModel, CoverageGapRequest, CoverageAnalysisResponse, AIAnalysisData
-from coverage_gap.coverage_gap_service import get_coverage_gap_analysis, get_ai_analysis_only
+from coverage_gap.coverage_gap_service import get_coverage_gap_analysis, get_coverage_gap_analysis_stream, get_ai_analysis_only
 
 coverage_gap_router = APIRouter(
         tags=["coverage_gap"] 
 )
 
 
-@coverage_gap_router.post("/coverage_gap_warehouses", response_model=ResponseModel[CoverageAnalysisResponse])
+@coverage_gap_router.post("/coverage_gap_warehouses")
 async def coverage_gap_warehouses(
     request: CoverageGapRequest = CoverageGapRequest(),
     radius: Optional[float] = None
 ):
     """
-    Get comprehensive coverage gap analysis with warehouses (grouped by zipcode and radius).
+    Get comprehensive coverage gap analysis with warehouses (grouped by city and radius).
+    Returns Server-Sent Events (SSE) stream with progress updates and final result.
     
     Query parameters:
-    - radius: Radius in miles for grouping nearby warehouses (default: groups by zipcode only)
+    - radius: Radius in miles for grouping nearby warehouses (default: groups by city only)
     
     Accepts optional filters in request body to filter warehouses by tier, state, city, etc.
     
     Returns:
+    - SSE stream with progress messages (type: "log") and final data (type: "data")
     - All warehouses in StaticWarehouseData format
-    - Coverage analysis by location (grouped by zipcode and radius if provided)
+    - Coverage analysis by location (grouped by city and radius if provided)
     - Total counts and metrics
     """
     try:
-        data = await get_coverage_gap_analysis(request.filters, radius)
-        return ResponseModel(
-            status="success",
-            data=data
+        return StreamingResponse(
+            get_coverage_gap_analysis_stream(request.filters, radius),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
+            }
         )
     except Exception as e:
         print(f"Error in coverage gap analysis: {str(e)}")
