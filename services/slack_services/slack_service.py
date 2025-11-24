@@ -3,24 +3,21 @@ from typing import List, Tuple
 from fastapi import HTTPException
 import requests
 
-from warehouse.models import ChannelData, WarehouseData
+from warehouse.models import ChannelData, ExportWarehouseData, WarehouseData
 
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")               
 SLACK_CANVAS_CREATE_URL = "https://slack.com/api/canvases.create"
 
 # Column widths for table alignment
 COLUMN_WIDTHS = {
-    "Warehouse Name": 20,
+    "ID": 20,
     "Tier": 6,
-    "Contact Name": 15,
+    "Name": 15,
     "Email": 25,
     "Phone": 15,
-    "Website": 20,
-    "Zip Searched": 12,
-    "Radius": 6,
-    "Assigned": 8,
+    "Miles Away": 6,
+    "Assigned To": 8,
     "Called?": 8,
-    "Emailed?": 8,
     "Notes": 15
 }
 
@@ -90,60 +87,77 @@ def join_slack_channel(channel_id: str):
             raise Exception(f"Failed to join channel: {data}")
     
 def build_combined_canvas_markdown(
-    warehouses: List[WarehouseData],
-    zip_searched: str,
-    radius: str,
-    has_header: bool
+    warehouses: List[ExportWarehouseData],
 ) -> str:
     """Build Markdown table with padded values for Slack Canvas."""
-    headers = list(COLUMN_WIDTHS.keys())
+    # Updated column order and widths
+    COLUMN_WIDTHS_ORDERED = {
+        "ID": 20,
+        "Called?": 20,
+        "Assigned To": 20,
+        "Tier": 20,
+        "Name": 20,
+        "Phone": 20,
+        "Email": 25,
+        "Miles Away": 20,
+        "Notes": 20
+    }
+    
+    headers = list(COLUMN_WIDTHS_ORDERED.keys())
     
     # Calculate the maximum width needed for each column
-    # Start with the header width and the defined minimum width
     actual_widths = {}
     for h in headers:
-        actual_widths[h] = max(COLUMN_WIDTHS[h], len(h) + 1)
+        actual_widths[h] = max(COLUMN_WIDTHS_ORDERED[h], len(h) + 1)
     
     # Check all warehouse data to find the maximum width needed
     for w in warehouses:
         f = w.fields
-        actual_widths["Warehouse Name"] = max(actual_widths["Warehouse Name"], len(str(f.warehouse_name or "")))
+        # Safely concatenate phone numbers, filtering out None values
+        phone_numbers = [
+            f.office_phone,
+            f.cell_phone,
+            f.contact_2_cell_phone,
+            f.contact_2_office_phone,
+            f.contact_3_cell_phone
+        ]
+        # Filter out None values and join with commas
+        phone_number = ", ".join([p for p in phone_numbers if p])
+        
+        actual_widths["ID"] = max(actual_widths["ID"], len(str(w.warehouse_id or "")))
         actual_widths["Tier"] = max(actual_widths["Tier"], len(str(f.tier or "")))
-        actual_widths["Contact Name"] = max(actual_widths["Contact Name"], len(str(f.contact_name or "")))
+        actual_widths["Name"] = max(actual_widths["Name"], len(str(f.contact_name or "")))
+        actual_widths["Phone"] = max(actual_widths["Phone"], len(phone_number))
         actual_widths["Email"] = max(actual_widths["Email"], len(str(f.contact_email or "")))
-        actual_widths["Phone"] = max(actual_widths["Phone"], len(str(f.office_phone or "")))
-        actual_widths["Website"] = max(actual_widths["Website"], len(str(f.website or "")))
-        actual_widths["Zip Searched"] = max(actual_widths["Zip Searched"], len(str(zip_searched or "")))
-        actual_widths["Radius"] = max(actual_widths["Radius"], len(str(radius or "")))
+        actual_widths["Miles Away"] = max(actual_widths["Miles Away"], len(str(w.distance_miles or "")))
     
     rows = []
     
-    if has_header:
-        # Include actual column headers
-        header_row = "| " + " | ".join(pad(h, actual_widths[h]) for h in headers) + " |"
-        separator_row = "|-" + "-|-".join("-" * actual_widths[h] for h in headers) + "-|"
-        rows.extend([header_row, separator_row])
-    else:
-        # Include empty header row (invisible) but with separator to maintain table structure
-        empty_header_row = "| " + " | ".join(pad("", actual_widths[h]) for h in headers) + " |"
-        separator_row = "|-" + "-|-".join("-" * actual_widths[h] for h in headers) + "-|"
-        rows.extend([empty_header_row, separator_row])
+    header_row = "| " + " | ".join(pad(h, actual_widths[h]) for h in headers) + " |"
+    separator_row = "|-" + "-|-".join("-" * actual_widths[h] for h in headers) + "-|"
+    rows.extend([header_row, separator_row])
 
-    # Add data rows (always included regardless of has_header)
+    # Add data rows with correct column order
     for w in warehouses:
         f = w.fields
+        phone_numbers = [
+            f.office_phone,
+            f.cell_phone,
+            f.contact_2_cell_phone,
+            f.contact_2_office_phone,
+            f.contact_3_cell_phone
+        ]
+        phone_number = ", ".join([p for p in phone_numbers if p])
+        
         row = "| " + " | ".join([
-            pad(f.warehouse_name, actual_widths["Warehouse Name"]),
-            pad(f.tier, actual_widths["Tier"]),
-            pad(f.contact_name, actual_widths["Contact Name"]),
-            pad(f.contact_email, actual_widths["Email"]),
-            pad(f.office_phone, actual_widths["Phone"]),
-            pad(f.website, actual_widths["Website"]),
-            pad(zip_searched, actual_widths["Zip Searched"]),
-            pad(radius, actual_widths["Radius"]),
-            pad("", actual_widths["Assigned"]),
+            pad(str(w.warehouse_id), actual_widths["ID"]),
             pad("", actual_widths["Called?"]),
-            pad("", actual_widths["Emailed?"]),
+            pad("", actual_widths["Assigned To"]),
+            pad(f.tier or "", actual_widths["Tier"]),
+            pad(f.contact_name or "", actual_widths["Name"]),
+            pad(phone_number, actual_widths["Phone"]),
+            pad(f.contact_email or "", actual_widths["Email"]),
+            pad(str("%.2f" % w.distance_miles) if w.distance_miles else "", actual_widths["Miles Away"]),
             pad("", actual_widths["Notes"]),
         ]) + " |"
         rows.append(row)
@@ -338,7 +352,7 @@ def post_message_to_channel(channel_id: str, message: str, canvas_id: str = None
     return data
 
 async def export_warehouse_results_to_slack(
-    warehouses: List[WarehouseData],
+    warehouses: List[ExportWarehouseData],
     zip_searched: str,
     radius: str,
     request_id: str
@@ -358,9 +372,6 @@ async def export_warehouse_results_to_slack(
 
     new_table_markdown = build_combined_canvas_markdown(
         warehouses=warehouses,
-        zip_searched=zip_searched,
-        radius=radius,
-        has_header= True #not (canvas_id and file_id)
     )
 
     if canvas_id and file_id:

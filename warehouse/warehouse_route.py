@@ -6,7 +6,7 @@ import time
 from services.messaging.email_service import send_bulk_email
 from services.geolocation.geolocation_service import get_coordinates_google, update_airtable_coordinates
 from services.slack_services.slack_service import export_warehouse_results_to_slack, get_channel_data_by_request
-from warehouse.models import ChannelData, LocationRequest, ResponseModel, SendBulkEmailData, WarehouseData
+from warehouse.models import ChannelData, ExportWarehouseData, LocationRequest, ResponseModel, SendBulkEmailData, WarehouseData
 from warehouse.warehouse_service import fetch_orders_by_requestid_from_airtable, fetch_orders_from_airtable, fetch_warehouses_from_airtable, find_nearby_warehouses, invalidate_warehouse_cache
 
 
@@ -59,7 +59,7 @@ async def find_nearby_warehouses_endpoint(request: LocationRequest):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @warehouse_router.post("/search/export")
-async def export_search_to_slack(warehouses: List[WarehouseData], zip: str, radius: str, request_id: str):
+async def export_search_to_slack(warehouses: List[ExportWarehouseData], zip: str, radius: str, request_id: str):
     try:
         canvas_id = await export_warehouse_results_to_slack(
             warehouses=warehouses,

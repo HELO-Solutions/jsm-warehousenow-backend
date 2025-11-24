@@ -271,9 +271,7 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
                 })
         else:
             warehouses_without_coords += 1
-    
-    print(f"📊 Coordinate analysis: {warehouses_with_coords} with coordinates, {warehouses_without_coords} without")
-    print(f"🎯 Haversine pre-filtering: {len(warehouses)} → {len(haversine_filtered_warehouses)} warehouses")
+
     
     if not haversine_filtered_warehouses:
         return {"origin_zip": origin_zip, "warehouses": [], "ai_analysis": GENERAL_AI_ANALYSIS}

@@ -32,7 +32,9 @@ class WarehouseFields(BaseModel):
     cell_phone: Optional[str] = Field(None, alias="Cell Phone")
     contact_2_name: Optional[str] = Field(None, alias="Contact 2 Name")
     contact_2_email: Optional[str] = Field(None, alias="Contact 3 Email Address")
-    contact_2_phone: Optional[str] = Field(None, alias="Contact 2 Office Number")
+    contact_2_cell_phone: Optional[str] = Field(None, alias="Contact 2 Cell Phone")
+    contact_3_cell_phone: Optional[str] = Field(None, alias="Contact 3 Cell Phone")
+    contact_2_office_phone: Optional[str] = Field(None, alias="Contact 2 Office Phone")
     website: Optional[str] = Field(None, alias="Website")
     email_3: Optional[str] = None
     hours_of_operation: Optional[str] = None
@@ -62,6 +64,12 @@ class WarehouseFields(BaseModel):
 class WarehouseData(BaseModel):
     id: str
     warehouse_id: Optional[str] = None
+    fields: WarehouseFields
+
+class ExportWarehouseData(BaseModel):
+    id: str
+    warehouse_id: Optional[str] = None
+    distance_miles: Optional[float] = None
     fields: WarehouseFields
 
 class FilterWarehouseData(BaseModel):
