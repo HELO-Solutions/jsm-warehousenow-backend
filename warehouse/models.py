@@ -135,6 +135,7 @@ class CoverageGap(BaseModel):
     warehouseCount: int
     minimumDistance: float
     gapScore: float
+    requestCount: int  # Total requests for this city
 
 class HighRequestArea(BaseModel):
     city: str

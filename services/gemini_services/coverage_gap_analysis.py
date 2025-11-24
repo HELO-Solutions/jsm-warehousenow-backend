@@ -240,7 +240,8 @@ async def analyze_coverage_gaps_with_ai(city_warehouses_dict: Dict[str, Dict], t
             zipcodes=city_info.get('zipcodes', []),
             warehouseCount=0,  # No warehouses
             minimumDistance=min_distance,
-            gapScore=gap_score
+            gapScore=gap_score,
+            requestCount=request_count  # Total requests for this city
         ))
     
     # Rank coverage gaps: cities with requests first, then by request volume
@@ -612,7 +613,8 @@ async def analyze_coverage_gaps_without_ai(city_warehouses_dict: Dict[str, Dict]
             zipcodes=city_info.get('zipcodes', []),
             warehouseCount=0,  # No warehouses
             minimumDistance=min_distance,
-            gapScore=gap_score
+            gapScore=gap_score,
+            requestCount=request_count  # Total requests for this city
         ))
     
     # Rank coverage gaps: cities with requests first, then by request volume
