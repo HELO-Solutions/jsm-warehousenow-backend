@@ -4,7 +4,7 @@ Simple script to run the coordinate population process.
 """
 
 import asyncio
-from populate_coordinates import main
+from scripts.populate_coordinates import main
 
 if __name__ == "__main__":
     print("Starting Airtable coordinate population...")

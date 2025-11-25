@@ -14,7 +14,7 @@ class TestWarehouseService:
     """Test cases for warehouse service functions"""
 
     @pytest.mark.asyncio
-    async def test_fetch_warehouses_from_airtable_success(self, mock_env_vars):
+    async def test_fetch_warehouses_from_airtable_success(self):
         """Test successful warehouse fetching from Airtable"""
         mock_response = {
             "records": [
@@ -43,7 +43,7 @@ class TestWarehouseService:
             assert result[0]["fields"]["Name"] == "Test Warehouse"
 
     @pytest.mark.asyncio
-    async def test_fetch_warehouses_from_airtable_error(self, mock_env_vars):
+    async def test_fetch_warehouses_from_airtable_error(self):
         """Test warehouse fetching with HTTP error"""
         with patch('httpx.AsyncClient') as mock_client:
             mock_instance = AsyncMock()
@@ -87,7 +87,7 @@ class TestWarehouseService:
         assert "State" in missing or "Zip" in missing
 
     @pytest.mark.asyncio
-    async def test_find_nearby_warehouses_success(self, mock_env_vars):
+    async def test_find_nearby_warehouses_success(self):
         """Test successful nearby warehouse search"""
         mock_warehouses = [
             {
@@ -121,7 +121,7 @@ class TestWarehouseService:
             assert result["ai_analysis"] == "Test AI analysis"
 
     @pytest.mark.asyncio
-    async def test_find_nearby_warehouses_invalid_zip(self, mock_env_vars):
+    async def test_find_nearby_warehouses_invalid_zip(self):
         """Test nearby warehouse search with invalid ZIP code"""
         with patch('services.geolocation.geolocation_service.get_coordinates_mapbox') as mock_mapbox:
             mock_mapbox.return_value = None  # Invalid ZIP
