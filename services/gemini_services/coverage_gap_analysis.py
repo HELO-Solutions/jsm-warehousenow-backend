@@ -11,7 +11,6 @@ import google.generativeai as genai
 from typing import List, Dict
 from datetime import datetime, timezone, timedelta
 from warehouse.models import StaticWarehouseData, AIAnalysisData, CoverageGap, HighRequestArea, RequestTrends, Recommendation
-from services.geolocation.geolocation_service import haversine
 
 # Constants for API access
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
@@ -176,7 +175,7 @@ async def analyze_coverage_gaps_with_ai(city_warehouses_dict: Dict[str, Dict], t
     """Analyze coverage gaps - CODE calculates data, AI explains recommendations.
     
     Args:
-        city_warehouses_dict: Pre-grouped city data with warehouses (NO radius expansion for AI)
+        city_warehouses_dict: Pre-grouped city data with warehouses (with radius expansion)
         total_requests: Total requests across all warehouses
         total_unique_warehouses: Total number of unique warehouses
     """
@@ -216,22 +215,6 @@ async def analyze_coverage_gaps_with_ai(city_warehouses_dict: Dict[str, Dict], t
         else:
             gap_score = 0.1  # Lower priority for cities without requests
         
-        # Find minimum distance to nearest warehouse
-        min_distance = float('inf')
-        if city_info.get('latitude') and city_info.get('longitude'):
-            city_lat = city_info['latitude']
-            city_lng = city_info['longitude']
-            
-            # Check distance to all warehouses
-            for other_city_key, data in city_warehouses_dict.items():
-                for warehouse in data["warehouses"]:
-                    if warehouse.lat != 0 and warehouse.lng != 0:
-                        distance = haversine(city_lat, city_lng, warehouse.lat, warehouse.lng)
-                        min_distance = min(min_distance, distance)
-        
-        if min_distance == float('inf'):
-            min_distance = 0.0
-        
         coverage_gaps.append(CoverageGap(
             city=city_info['city'],
             state=city_info['state'],
@@ -239,7 +222,6 @@ async def analyze_coverage_gaps_with_ai(city_warehouses_dict: Dict[str, Dict], t
             longitude=city_info.get('longitude', 0.0),
             zipcodes=city_info.get('zipcodes', []),
             warehouseCount=0,  # No warehouses
-            minimumDistance=min_distance,
             gapScore=gap_score,
             requestCount=request_count  # Total requests for this city
         ))
@@ -589,22 +571,6 @@ async def analyze_coverage_gaps_without_ai(city_warehouses_dict: Dict[str, Dict]
         else:
             gap_score = 0.1  # Lower priority for cities without requests
         
-        # Find minimum distance to nearest warehouse
-        min_distance = float('inf')
-        if city_info.get('latitude') and city_info.get('longitude'):
-            city_lat = city_info['latitude']
-            city_lng = city_info['longitude']
-            
-            # Check distance to all warehouses
-            for other_city_key, data in city_warehouses_dict.items():
-                for warehouse in data["warehouses"]:
-                    if warehouse.lat != 0 and warehouse.lng != 0:
-                        distance = haversine(city_lat, city_lng, warehouse.lat, warehouse.lng)
-                        min_distance = min(min_distance, distance)
-        
-        if min_distance == float('inf'):
-            min_distance = 0.0
-        
         coverage_gaps.append(CoverageGap(
             city=city_info['city'],
             state=city_info['state'],
@@ -612,7 +578,6 @@ async def analyze_coverage_gaps_without_ai(city_warehouses_dict: Dict[str, Dict]
             longitude=city_info.get('longitude', 0.0),
             zipcodes=city_info.get('zipcodes', []),
             warehouseCount=0,  # No warehouses
-            minimumDistance=min_distance,
             gapScore=gap_score,
             requestCount=request_count  # Total requests for this city
         ))

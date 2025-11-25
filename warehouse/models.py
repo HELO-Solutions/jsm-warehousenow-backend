@@ -141,7 +141,6 @@ class CoverageGap(BaseModel):
     longitude: float
     zipcodes: List[str]
     warehouseCount: int
-    minimumDistance: float
     gapScore: float
     requestCount: int  # Total requests for this city
 

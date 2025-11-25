@@ -20,7 +20,7 @@ from warehouse.models import (
     CoverageAnalysis,
     MockWarehouse
 )
-from services.gemini_services.coverage_gap_analysis import analyze_coverage_gaps_with_ai
+from services.gemini_services.coverage_gap_analysis import analyze_coverage_gaps_with_ai, get_request_counts_by_city
 from services.geolocation.geolocation_service import haversine
 from coverage_gap.coverage_gap_precache import get_precache_key, PRECACHED_RADII
 
@@ -454,9 +454,15 @@ async def get_coverage_gap_analysis_stream(
         print(f"Average monthly requests: {average_monthly_requests}")
         yield format_log(f"Average monthly requests: {average_monthly_requests}", 50)
         
+        # Step 6.5: Get request counts by city from Requests table
+        yield format_log("Fetching request counts by city from Requests table...", 51)
+        city_request_counts = await get_request_counts_by_city()
+        print(f"Fetched request counts for {len(city_request_counts)} cities from Requests table")
+        yield format_log(f"Fetched request counts for {len(city_request_counts)} cities", 52)
+        
         # Step 7: Load all US cities
         print("Loading all US cities...")
-        yield format_log("Loading all US cities from database...", 52)
+        yield format_log("Loading all US cities from database...", 53)
         us_cities = load_us_cities()
         print(f"Loaded {len(us_cities)} US cities from us_cities.json")
         yield format_log(f"Loaded {len(us_cities)} US cities from database", 55)
@@ -578,7 +584,9 @@ async def get_coverage_gap_analysis_stream(
             # Get warehouse data for this city if available
             warehouse_data = warehouse_city_data.get(city_key, {})
             warehouses_in_city = warehouse_data.get("warehouses", [])
-            total_requests_in_city = warehouse_data.get("totalRequests", 0)
+            # Use request counts from Requests table (where requests originated from)
+            # This matches the AI analysis endpoint logic
+            total_requests_in_city = city_request_counts.get(city_key, 0)
             
             # Count warehouses by tier
             gold_count = sum(1 for w in warehouses_in_city if w.tier in ["Gold", "Potential Gold"])
@@ -676,12 +684,18 @@ async def get_coverage_gap_analysis_stream(
         raise
 
 
-async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None, radius_miles: Optional[float] = None) -> CoverageAnalysisResponse:
-    """Get comprehensive coverage gap analysis for all US cities with warehouse data where available."""
+async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None, radius_miles: Optional[float] = None, skip_precache: bool = False) -> CoverageAnalysisResponse:
+    """Get comprehensive coverage gap analysis for all US cities with warehouse data where available.
     
-    # STEP 1: Check pre-cached results (if no filters and radius matches)
+    Args:
+        filters: Optional filters to apply to warehouses
+        radius_miles: Optional radius for grouping nearby warehouses
+        skip_precache: If True, bypasses pre-cache check (useful for refreshing cache)
+    """
+    
+    # STEP 1: Check pre-cached results (if no filters and radius matches, and not skipping)
     # Normalize radius to float for comparison
-    if not filters and radius_miles is not None:
+    if not skip_precache and not filters and radius_miles is not None:
         radius_float = float(radius_miles)
         if radius_float in PRECACHED_RADII:
             precache_key = get_precache_key(radius_float)
@@ -691,7 +705,7 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
                 print(f"DEBUG: Pre-cache key: {precache_key}")
                 return precached
     
-    # STEP 2: Check regular cache (existing logic)
+    # STEP 2: Check regular cache (existing logic) - skip if skip_precache is True
     # Create cache key based on filters and radius
     import json
     if filters:
@@ -703,12 +717,13 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
     radius_key = f"_radius_{radius_miles}" if radius_miles else "_no_radius"
     cache_key = f"coverage_gap:{filter_key}{radius_key}"
     
-    # Check cache first
-    cached = _cache.get(cache_key)
-    if cached:
-        print("=== COVERAGE GAP ANALYSIS (CACHED) ===")
-        print(f"DEBUG: Cache key: {cache_key}")
-        return cached
+    # Check cache first (unless we're forcing a refresh)
+    if not skip_precache:
+        cached = _cache.get(cache_key)
+        if cached:
+            print("=== COVERAGE GAP ANALYSIS (CACHED) ===")
+            print(f"DEBUG: Cache key: {cache_key}")
+            return cached
     
     print("=== COVERAGE GAP ANALYSIS STARTED ===")
     print(f"DEBUG: Cache key: {cache_key}")
@@ -739,6 +754,11 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
     # Get average monthly requests
     average_monthly_requests = await get_average_monthly_requests()
     print(f"Average monthly requests: {average_monthly_requests}")
+    
+    # Get request counts by city from Requests table
+    print("Fetching request counts by city from Requests table...")
+    city_request_counts = await get_request_counts_by_city()
+    print(f"Fetched request counts for {len(city_request_counts)} cities from Requests table")
     
     # Load all US cities
     print("Loading all US cities...")
@@ -842,7 +862,9 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
         # Get warehouse data for this city if available
         warehouse_data = warehouse_city_data.get(city_key, {})
         warehouses_in_city = warehouse_data.get("warehouses", [])
-        total_requests_in_city = warehouse_data.get("totalRequests", 0)
+        # Use request counts from Requests table (where requests originated from)
+        # This matches the AI analysis endpoint logic
+        total_requests_in_city = city_request_counts.get(city_key, 0)
         
         # Count warehouses by tier
         gold_count = sum(1 for w in warehouses_in_city if w.tier in ["Gold", "Potential Gold"])

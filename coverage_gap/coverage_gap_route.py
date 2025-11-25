@@ -4,7 +4,7 @@ from typing import Optional
 
 from warehouse.models import ResponseModel, CoverageGapRequest, CoverageAnalysisResponse, AIAnalysisData
 from coverage_gap.coverage_gap_service import get_coverage_gap_analysis, get_coverage_gap_analysis_stream, get_ai_analysis_only
-from coverage_gap.coverage_gap_precache import precache_all_radii
+from coverage_gap.coverage_gap_precache import precache_all_radii, precache_all_radii_stream
 
 coverage_gap_router = APIRouter(
         tags=["coverage_gap"] 
@@ -72,26 +72,38 @@ async def ai_analysis(
             data=data
         )
     except Exception as e:
-        print(f"Error in AI analysis: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+        import traceback
+        error_trace = traceback.format_exc()
+        error_msg = str(e) if str(e) else repr(e)
+        print(f"Error in AI analysis: {error_msg}")
+        print(f"Traceback: {error_trace}")
+        # Include traceback in detail if error message is empty
+        detail = f"AI analysis failed: {error_msg}" if error_msg else f"AI analysis failed: {error_trace}"
+        raise HTTPException(status_code=500, detail=detail)
 
 
 @coverage_gap_router.post("/coverage_gap/precache")
 async def trigger_precache():
     """
     Manually trigger pre-cache job for all configured radius values.
-    This endpoint allows admins to manually refresh pre-cached results.
+    Returns Server-Sent Events (SSE) stream with progress updates and final result.
+    
+    This endpoint allows frontend to manually refresh pre-cached results.
+    Shows real-time progress as each radius (25, 50, 100, 500 miles) is being cached.
     
     Returns:
-    - Status of pre-cache job for each radius (25, 50, 100, 500 miles)
+    - SSE stream with progress messages (type: "log") and final data (type: "data")
+    - Status of pre-cache job for each radius
+    - Summary with total, successful, and failed counts
     """
     try:
-        results = await precache_all_radii()
-        return ResponseModel(
-            status="success",
-            data={
-                "message": "Pre-cache job completed",
-                "results": results
+        return StreamingResponse(
+            precache_all_radii_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
             }
         )
     except Exception as e:
