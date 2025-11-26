@@ -22,23 +22,23 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     print("✓ Background scheduler started")
     
-    # Schedule pre-cache job for coverage gap to run daily at 2 AM
+    # Schedule pre-cache job for coverage gap to run daily at 3 AM
     scheduler.add_job(
         precache_all_radii,
-        trigger=CronTrigger(hour=2, minute=0),  # 2 AM daily
+        trigger=CronTrigger(hour=3, minute=0),  # 3 AM daily
         id="precache_coverage_gap",
         replace_existing=True
     )
-    print("✓ Coverage gap pre-cache job scheduled (daily at 2 AM)")
+    print("✓ Coverage gap pre-cache job scheduled (daily at 3 AM)")
     
-    # Schedule pre-cache job for AI analysis to run daily at 2:30 AM
+    # Schedule pre-cache job for AI analysis to run daily at 3:30 AM
     scheduler.add_job(
         precache_ai_analysis,
-        trigger=CronTrigger(hour=2, minute=30),  # 2:30 AM daily
+        trigger=CronTrigger(hour=3, minute=30),  # 3:30 AM daily
         id="precache_ai_analysis",
         replace_existing=True
     )
-    print("✓ AI analysis pre-cache job scheduled (daily at 2:30 AM)")
+    print("✓ AI analysis pre-cache job scheduled (daily at 3:30 AM)")
     
     # Run initial pre-cache in background (non-blocking)
     asyncio.create_task(precache_all_radii())
