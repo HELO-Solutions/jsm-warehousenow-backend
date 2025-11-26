@@ -170,6 +170,7 @@ class AIAnalysisData(BaseModel):
     highRequestAreas: List[HighRequestArea]
     requestTrends: RequestTrends
     recommendations: List[Recommendation]
+    lastPrecacheTimestamp: Optional[str] = None  # ISO format timestamp of last AI analysis precache completion
 
 class MockWarehouse(BaseModel):
     id: str
@@ -203,6 +204,7 @@ class CoverageAnalysisResponse(BaseModel):
     totalWarehouses: int
     totalRequests: int
     analysisRadius: int 
+    lastPrecacheTimestamp: Optional[str] = None  # ISO format timestamp of last precache completion 
 
 class CoverageGapFilters(BaseModel):
     tier: Optional[List[str]] = None

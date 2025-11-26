@@ -5,6 +5,7 @@ from typing import Optional
 from warehouse.models import ResponseModel, CoverageGapRequest, CoverageAnalysisResponse, AIAnalysisData
 from coverage_gap.coverage_gap_service import get_coverage_gap_analysis, get_coverage_gap_analysis_stream, get_ai_analysis_only
 from coverage_gap.coverage_gap_precache import precache_all_radii, precache_all_radii_stream
+from coverage_gap.ai_analysis_precache import precache_ai_analysis_stream
 
 coverage_gap_router = APIRouter(
         tags=["coverage_gap"] 
@@ -109,4 +110,33 @@ async def trigger_precache():
     except Exception as e:
         print(f"Error in pre-cache job: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Pre-cache failed: {str(e)}")
+
+
+@coverage_gap_router.post("/ai_analysis/precache")
+async def trigger_ai_analysis_precache():
+    """
+    Manually trigger pre-cache job for AI analysis.
+    Returns Server-Sent Events (SSE) stream with progress updates and final result.
+    
+    This endpoint allows frontend to manually refresh pre-cached AI analysis results.
+    Shows real-time progress as AI analysis is being generated and cached.
+    
+    Returns:
+    - SSE stream with progress messages (type: "log") and final data (type: "data")
+    - Status of pre-cache job
+    - Last precache timestamp
+    """
+    try:
+        return StreamingResponse(
+            precache_ai_analysis_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
+            }
+        )
+    except Exception as e:
+        print(f"Error in AI analysis pre-cache job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI analysis pre-cache failed: {str(e)}")
 

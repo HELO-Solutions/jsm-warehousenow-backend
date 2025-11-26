@@ -22,7 +22,7 @@ from warehouse.models import (
 )
 from services.gemini_services.coverage_gap_analysis import analyze_coverage_gaps_with_ai, get_request_counts_by_city
 from services.geolocation.geolocation_service import haversine
-from coverage_gap.coverage_gap_precache import get_precache_key, PRECACHED_RADII
+from coverage_gap.coverage_gap_precache import get_precache_key, PRECACHED_RADII, get_last_precache_timestamp
 
 load_dotenv()
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
@@ -382,6 +382,10 @@ async def get_coverage_gap_analysis_stream(
                 if precached:
                     print("=== COVERAGE GAP ANALYSIS (PRECACHED) ===")
                     print(f"DEBUG: Pre-cache key: {precache_key}")
+                    # Always include the latest precache timestamp (even for cached results)
+                    last_precache_timestamp = get_last_precache_timestamp()
+                    if last_precache_timestamp:
+                        precached.lastPrecacheTimestamp = last_precache_timestamp
                     yield format_log("Using pre-cached results", 100)
                     yield format_data(precached)
                     return
@@ -402,6 +406,10 @@ async def get_coverage_gap_analysis_stream(
         if cached:
             print("=== COVERAGE GAP ANALYSIS (CACHED) ===")
             print(f"DEBUG: Cache key: {cache_key}")
+            # Always include the latest precache timestamp (even for cached results)
+            last_precache_timestamp = get_last_precache_timestamp()
+            if last_precache_timestamp:
+                cached.lastPrecacheTimestamp = last_precache_timestamp
             yield format_log("Using cached results")
             yield format_data(cached)
             return
@@ -662,13 +670,16 @@ async def get_coverage_gap_analysis_stream(
         
         # Step 11: Build final result
         yield format_log("Finalizing results...", 98)
+        # Get last precache timestamp
+        last_precache_timestamp = get_last_precache_timestamp()
         result = CoverageAnalysisResponse(
             warehouses=static_warehouses,
             coverageAnalysis=coverage_analysis,
             average_number_of_requests=average_monthly_requests,
             totalWarehouses=len(static_warehouses),
             totalRequests=total_requests,
-            analysisRadius=radius_miles if radius_miles else 50
+            analysisRadius=radius_miles if radius_miles else 50,
+            lastPrecacheTimestamp=last_precache_timestamp
         )
         
         # Cache the result for 30 minutes
@@ -723,7 +734,11 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
         if cached:
             print("=== COVERAGE GAP ANALYSIS (CACHED) ===")
             print(f"DEBUG: Cache key: {cache_key}")
-            return cached
+            # Always include the latest precache timestamp (even for cached results)
+            last_precache_timestamp = get_last_precache_timestamp()
+            if last_precache_timestamp:
+                cached.lastPrecacheTimestamp = last_precache_timestamp
+        return cached
     
     print("=== COVERAGE GAP ANALYSIS STARTED ===")
     print(f"DEBUG: Cache key: {cache_key}")
@@ -938,13 +953,16 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
             reqCount=total_requests_in_city
         ))
     
+    # Get last precache timestamp
+    last_precache_timestamp = get_last_precache_timestamp()
     result = CoverageAnalysisResponse(
         warehouses=static_warehouses,
         coverageAnalysis=coverage_analysis,
         average_number_of_requests=average_monthly_requests,
         totalWarehouses=len(static_warehouses),
         totalRequests=total_requests,
-        analysisRadius=radius_miles if radius_miles else 50  # Use provided radius or default to 50
+        analysisRadius=radius_miles if radius_miles else 50,  # Use provided radius or default to 50
+        lastPrecacheTimestamp=last_precache_timestamp
     )
     
     # Cache the result for 30 minutes
@@ -952,13 +970,29 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
     return result
 
 
-async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None) -> AIAnalysisData:
+async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, skip_cache: bool = False) -> AIAnalysisData:
     """Get only AI analysis for coverage gaps.
     
     Always applies 25-mile radius expansion after grouping by cities.
     This ensures all sections (coverage gaps, high request areas, etc.) 
     use the expanded warehouse data.
+    
+    Args:
+        filters: Optional filters to apply to warehouses
+        skip_cache: If True, bypass cache and force fresh analysis
     """
+    
+    # Check cache first (unless we're forcing a refresh or filters are applied)
+    if not skip_cache and not filters:
+        from coverage_gap.ai_analysis_precache import AI_ANALYSIS_PRECACHE_KEY, get_last_ai_analysis_precache_timestamp
+        cached = _cache.get(AI_ANALYSIS_PRECACHE_KEY)
+        if cached:
+            print("=== AI ANALYSIS (PRECACHED) ===")
+            # Always include the latest precache timestamp (even for cached results)
+            last_precache_timestamp = get_last_ai_analysis_precache_timestamp()
+            if last_precache_timestamp:
+                cached.lastPrecacheTimestamp = last_precache_timestamp
+            return cached
     
     print("=== AI ANALYSIS STARTED ===")
     
@@ -1059,7 +1093,7 @@ async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None) -> 
             processed += 1
             if processed % 5000 == 0:
                 print(f"  Processing city {processed}/{len(us_cities)}...")
-            
+    
             # Skip if city already has warehouses (already processed above)
             if city_key in city_warehouses_dict:
                 continue
@@ -1100,6 +1134,15 @@ async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None) -> 
     
     ai_analysis = await analyze_coverage_gaps_with_ai(city_warehouses_dict, total_requests, len(unique_warehouse_ids))
     print(f"AI analysis completed: {len(ai_analysis.coverageGaps)} gaps, {len(ai_analysis.recommendations)} recommendations")
+    
+    # Cache the result if no filters (for precache)
+    if not filters:
+        from coverage_gap.ai_analysis_precache import AI_ANALYSIS_PRECACHE_KEY, get_last_ai_analysis_precache_timestamp
+        _cache.set(AI_ANALYSIS_PRECACHE_KEY, ai_analysis, ttl=90000)  # 25 hours
+        # Include the latest precache timestamp
+        last_precache_timestamp = get_last_ai_analysis_precache_timestamp()
+        if last_precache_timestamp:
+            ai_analysis.lastPrecacheTimestamp = last_precache_timestamp
     
     return ai_analysis
 

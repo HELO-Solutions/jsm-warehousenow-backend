@@ -4,15 +4,37 @@ Automatically caches results for common radius values every 24 hours.
 """
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import List, Dict, AsyncGenerator, Optional
 from warehouse.warehouse_service import _cache
 
 # Pre-cached radius values (as floats to match query parameter types)
-PRECACHED_RADII = [25.0, 50.0, 100.0, 500.0]
+PRECACHED_RADII = [25.0, 50.0, 100.0, 250.0, 500.0]
+
+# Cache key for last precache timestamp
+LAST_PRECACHE_TIMESTAMP_KEY = "coverage_gap:precache:last_timestamp"
 
 def get_precache_key(radius: float) -> str:
     """Generate cache key for pre-cached results."""
     return f"coverage_gap:precached:radius_{radius}"
+
+def save_last_precache_timestamp() -> str:
+    """
+    Save the current timestamp as the last precache completion time.
+    Returns the ISO format timestamp string.
+    """
+    timestamp = datetime.now(timezone.utc).isoformat()
+    # Store with a long TTL (30 days) so it persists even if cache expires
+    _cache.set(LAST_PRECACHE_TIMESTAMP_KEY, timestamp, ttl=2592000)  # 30 days
+    print(f"[PRECACHE] Saved last precache timestamp: {timestamp}")
+    return timestamp
+
+def get_last_precache_timestamp() -> Optional[str]:
+    """
+    Get the last precache completion timestamp.
+    Returns ISO format timestamp string or None if never run.
+    """
+    return _cache.get(LAST_PRECACHE_TIMESTAMP_KEY)
 
 async def precache_coverage_gap_analysis(radius: float) -> bool:
     """
@@ -53,6 +75,9 @@ async def precache_all_radii() -> Dict[float, str]:
     for radius in PRECACHED_RADII:
         success = await precache_coverage_gap_analysis(radius)
         results[radius] = "success" if success else "failed"
+    
+    # Save timestamp after completion (even if some failed, we still record the run)
+    save_last_precache_timestamp()
     
     print(f"[PRECACHE] ===== Pre-cache job completed =====")
     print(f"[PRECACHE] Results: {results}")
@@ -99,6 +124,9 @@ async def precache_all_radii_stream() -> AsyncGenerator[str, None]:
             status_msg = "✓ Successfully cached" if success else "✗ Failed to cache"
             yield format_log(f"{status_msg} radius {radius} miles", progress)
         
+        # Save timestamp after completion (even if some failed, we still record the run)
+        timestamp = save_last_precache_timestamp()
+        
         # Final result
         yield format_log("Pre-cache job completed", 100)
         print(f"[PRECACHE] ===== Pre-cache job completed =====")
@@ -116,7 +144,8 @@ async def precache_all_radii_stream() -> AsyncGenerator[str, None]:
                 "successful": success_count,
                 "failed": failed_count,
                 "radii": list(results.keys())
-            }
+            },
+            "lastPrecacheTimestamp": timestamp
         }
         
         yield format_data(final_data)
