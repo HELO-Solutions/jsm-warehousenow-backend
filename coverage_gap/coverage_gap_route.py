@@ -12,7 +12,7 @@ coverage_gap_router = APIRouter(
 )
 
 
-@coverage_gap_router.post("/coverage_gap_warehouses")
+@app.route('/coverage_gap_warehouses', methods=['GET', 'POST'])
 async def coverage_gap_warehouses(
     request: CoverageGapRequest = CoverageGapRequest(),
     radius: Optional[float] = None
