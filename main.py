@@ -15,7 +15,7 @@ scheduler = AsyncIOScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Start scheduler ONLY
+    # Startup: Start scheduler and run initial pre-cache
     print("Starting application...")
     
     # Start scheduler
@@ -40,22 +40,18 @@ async def lifespan(app: FastAPI):
     )
     print("✓ AI analysis pre-cache job scheduled (daily at 3:30 AM)")
     
-    # DELAY the initial pre-cache - don't run it during startup!
-    # Schedule it to run 2 minutes after startup (after health checks pass)
-    async def delayed_initial_precache():
-        await asyncio.sleep(120)  # Wait 2 minutes
-        print("Starting delayed initial pre-cache...")
-        await precache_all_radii()
-        print("✓ Initial coverage gap pre-cache completed")
-        
-        # Then run AI analysis 15 minutes later
-        await asyncio.sleep(900)
-        print("Starting delayed AI analysis pre-cache...")
-        await precache_ai_analysis()
-        print("✓ Initial AI analysis pre-cache completed")
+    # Run initial pre-cache in background (non-blocking)
+    asyncio.create_task(precache_all_radii())
+    print("✓ Initial coverage gap pre-cache started in background")
     
-    asyncio.create_task(delayed_initial_precache())
-    print("✓ Initial pre-cache jobs scheduled to start after container is healthy")
+    # Run initial AI analysis pre-cache in background with delay (non-blocking)
+    # Delay by 15 minutes to avoid running both precache jobs simultaneously
+    async def delayed_ai_precache():
+        await asyncio.sleep(900)  # Wait 15 minutes (900 seconds) before starting
+        await precache_ai_analysis()
+    
+    asyncio.create_task(delayed_ai_precache())
+    print("✓ Initial AI analysis pre-cache scheduled to start in 15 minutes")
     
     yield
     
@@ -66,15 +62,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="jsm-warehousenow", lifespan=lifespan)
-
-# Add root-level health check endpoint BEFORE middleware
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # allow all origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
