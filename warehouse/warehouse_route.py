@@ -14,6 +14,11 @@ warehouse_router = APIRouter(
     tags=["Warehouse"] 
 )
 
+
+@warehouse_router.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
 @warehouse_router.get("/warehouses")
 async def warehouses():
     try:

@@ -11,9 +11,6 @@ coverage_gap_router = APIRouter(
         tags=["coverage_gap"] 
 )
 
-@coverage_gap_router.get("/health")
-async def health_check():
-    return {"status": "healthy"}
 
 @coverage_gap_router.post("/coverage_gap_warehouses")
 async def coverage_gap_warehouses(
