@@ -62,6 +62,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="jsm-warehousenow", lifespan=lifespan)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+    
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # allow all origins

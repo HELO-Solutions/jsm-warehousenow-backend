@@ -15,10 +15,6 @@ warehouse_router = APIRouter(
 )
 
 
-@warehouse_router.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
 @warehouse_router.get("/warehouses")
 async def warehouses():
     try:
