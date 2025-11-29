@@ -103,7 +103,7 @@ class SendBulkEmailData(BaseModel):
     emails_data: list[SendEmailData]
     images: list[str] = None
 
-class OrderData(BaseModel):
+class RequestData(BaseModel):
     commodity: Optional[str] = None
     loading_method: Optional[str] = None
     request_images : list[str] = None

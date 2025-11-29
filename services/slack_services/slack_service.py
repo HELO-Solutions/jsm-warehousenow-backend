@@ -57,7 +57,6 @@ def is_bot_in_channel(channel_id: str) -> bool:
 def join_slack_channel(channel_id: str): 
     # First check if we're already in the channel
     if is_bot_in_channel(channel_id):
-        print(f"Bot is already a member of channel {channel_id}")
         return
     
     # Try to join (works for public channels only)

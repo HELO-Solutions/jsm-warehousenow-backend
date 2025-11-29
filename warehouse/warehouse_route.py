@@ -3,11 +3,12 @@ from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
 import time
 
+from services.airtable.requests import fetch_requests_from_airtable, fetch_request_by_id_from_airtable
 from services.messaging.email_service import send_bulk_email
 from services.geolocation.geolocation_service import get_coordinates_google, update_airtable_coordinates
-from services.slack_services.slack_service import export_warehouse_results_to_slack, get_channel_data_by_request
-from warehouse.models import ChannelData, ExportWarehouseData, LocationRequest, ResponseModel, SendBulkEmailData, WarehouseData
-from warehouse.warehouse_service import fetch_orders_by_requestid_from_airtable, fetch_orders_from_airtable, fetch_warehouses_from_airtable, find_nearby_warehouses, invalidate_warehouse_cache
+from services.slack_services.slack_service import export_warehouse_results_to_slack
+from warehouse.models import ExportWarehouseData, LocationRequest, ResponseModel, SendBulkEmailData
+from warehouse.warehouse_service import fetch_warehouses_from_airtable, find_nearby_warehouses, invalidate_warehouse_cache
 
 
 warehouse_router = APIRouter(
@@ -33,17 +34,18 @@ async def warehouses():
 @warehouse_router.get("/requests")
 async def requests(request_id: int):
     try:
-        data = await fetch_orders_by_requestid_from_airtable(request_id=request_id)
-        if not data:
-            raise HTTPException(status_code=404, detail=f"Order with Request ID {request_id} not found")
+        data = await fetch_request_by_id_from_airtable(request_id=request_id)
         return ResponseModel(status="success", data=data)   
+    
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
     
 @warehouse_router.get("/all-requests")
 async def requests():
     try:
-        data = await fetch_orders_from_airtable()
+        data = await fetch_requests_from_airtable()
         if not data:
             raise HTTPException(status_code=404, detail=f"Orders not found")
         return ResponseModel(status="success", data=data)   
@@ -100,14 +102,11 @@ async def airtable_webhook(request: dict):
         coordinate_update_result = None
         
         if zip_code and record_id and (not current_lat or not current_lng):
-            print(f"🔍 Calculating coordinates for warehouse with ZIP: {zip_code}")
             
             try:
                 coordinates = get_coordinates_google(zip_code)
-                
                 if coordinates:
                     lat, lng = coordinates
-                    
                     update_success = await update_airtable_coordinates(record_id, lat, lng)
                     coordinate_update_result = {
                         "coordinates_calculated": True,
