@@ -349,6 +349,135 @@ def load_us_cities() -> Dict[str, Dict]:
         return {}
 
 
+def calculate_aggregated_request_count(
+    city_lat: float,
+    city_lng: float,
+    radius_miles: float,
+    us_cities: Dict[str, Dict],
+    city_request_counts: Dict[str, int]
+) -> int:
+    """Calculate total request count for a city by aggregating requests from all cities within radius.
+    
+    Optimized: Only checks cities that have requests (from city_request_counts) instead of all cities.
+    
+    Args:
+        city_lat: Latitude of the city
+        city_lng: Longitude of the city
+        radius_miles: Radius in miles to search for nearby cities
+        us_cities: Dictionary of all US cities keyed by "city,state"
+        city_request_counts: Dictionary of request counts per city keyed by "city,state"
+    
+    Returns:
+        Total request count including all cities within the radius
+    """
+    if not city_lat or not city_lng or radius_miles <= 0:
+        # If no radius or invalid coordinates, return just this city's count
+        return 0
+    
+    total_requests = 0
+    
+    # OPTIMIZATION: Only check cities that have requests (much smaller set!)
+    # Instead of checking all 30,116 cities, only check ~693 cities with requests
+    for other_city_key, request_count in city_request_counts.items():
+        if request_count == 0:
+            continue  # Skip cities with 0 requests
+        
+        other_city_info = us_cities.get(other_city_key)
+        if not other_city_info:
+            continue
+        
+        other_lat = other_city_info.get('latitude')
+        other_lng = other_city_info.get('longitude')
+        
+        # Skip if other city has no valid coordinates
+        if not other_lat or not other_lng:
+            continue
+        
+        # Calculate distance
+        distance = haversine(city_lat, city_lng, other_lat, other_lng)
+        
+        # If within radius, add its request count
+        if distance <= radius_miles:
+            total_requests += request_count
+    
+    return total_requests
+
+
+def get_relevant_cities_for_aggregation(
+    radius_miles: float,
+    us_cities: Dict[str, Dict],
+    city_request_counts: Dict[str, int],
+    warehouse_city_data: Dict[str, Dict]
+) -> set:
+    """Find all cities that need aggregated request count calculation.
+    
+    This includes:
+    1. Cities with requests
+    2. Cities with warehouses
+    3. Cities within radius of cities with requests/warehouses
+    
+    Args:
+        radius_miles: Radius in miles for expansion
+        us_cities: Dictionary of all US cities keyed by "city,state"
+        city_request_counts: Dictionary of request counts per city
+        warehouse_city_data: Dictionary of cities with warehouses
+    
+    Returns:
+        Set of city keys that need aggregated count calculation
+    """
+    relevant_cities = set()
+    
+    # Step 1: Add cities with requests
+    for city_key, count in city_request_counts.items():
+        if count > 0:
+            relevant_cities.add(city_key)
+    
+    # Step 2: Add cities with warehouses
+    for city_key in warehouse_city_data.keys():
+        relevant_cities.add(city_key)
+    
+    # Step 3: Expand - find all cities within radius of relevant cities
+    if radius_miles and radius_miles > 0:
+        expanded_relevant = set(relevant_cities)  # Start with existing relevant cities
+        processed = 0
+        
+        # For each relevant city, find all cities within radius
+        for city_key in relevant_cities:
+            city_info = us_cities.get(city_key)
+            if not city_info:
+                continue
+            
+            city_lat = city_info.get('latitude', 0.0)
+            city_lng = city_info.get('longitude', 0.0)
+            
+            if not city_lat or not city_lng:
+                continue
+            
+            processed += 1
+            if processed % 100 == 0:
+                print(f"  Expanding relevant cities: processed {processed}/{len(relevant_cities)} seed cities...")
+            
+            # Find all cities within radius
+            for other_city_key, other_city_info in us_cities.items():
+                if other_city_key in expanded_relevant:
+                    continue  # Already added
+                
+                other_lat = other_city_info.get('latitude', 0.0)
+                other_lng = other_city_info.get('longitude', 0.0)
+                
+                if not other_lat or not other_lng:
+                    continue
+                
+                distance = haversine(city_lat, city_lng, other_lat, other_lng)
+                if distance <= radius_miles:
+                    expanded_relevant.add(other_city_key)
+        
+        print(f"  Expanded from {len(relevant_cities)} to {len(expanded_relevant)} relevant cities")
+        return expanded_relevant
+    
+    return relevant_cities
+
+
 async def get_coverage_gap_analysis_stream(
     filters: Optional[CoverageGapFilters] = None, 
     radius_miles: Optional[float] = None
@@ -577,24 +706,70 @@ async def get_coverage_gap_analysis_stream(
             print(f"  Radius expansion completed. Cities with warehouses after expansion: {len(warehouse_city_data)}")
             yield format_log(f"Radius expansion completed. {len(warehouse_city_data)} cities now have warehouses", 90)
         
-        # Step 10: Create coverage analysis for ALL US cities
+        # Step 10: Pre-calculate aggregated request counts if radius expansion is enabled
+        aggregated_request_counts = {}
+        if radius_miles and radius_miles > 0:
+            print(f"Finding relevant cities for aggregated request counts (radius: {radius_miles} miles)...")
+            yield format_log(f"Finding relevant cities...", 92)
+            
+            # Get only relevant cities (cities with requests/warehouses + cities within radius)
+            relevant_cities = get_relevant_cities_for_aggregation(
+                radius_miles,
+                us_cities,
+                city_request_counts,
+                warehouse_city_data
+            )
+            
+            print(f"Pre-calculating aggregated request counts for {len(relevant_cities)} relevant cities...")
+            yield format_log(f"Pre-calculating aggregated counts for {len(relevant_cities)} cities...", 93)
+            
+            processed_agg = 0
+            total_cities_agg = len(relevant_cities)
+            for city_key in relevant_cities:
+                processed_agg += 1
+                if processed_agg % 1000 == 0:
+                    progress = 93 + int((processed_agg / total_cities_agg) * 2)  # 93-95% range
+                    print(f"  Pre-calculating aggregated counts: {processed_agg}/{total_cities_agg}...")
+                    yield format_log(f"Pre-calculating aggregated counts: {processed_agg}/{total_cities_agg}...", progress)
+                
+                city_info = us_cities.get(city_key, {})
+                city_lat = city_info.get('latitude', 0.0)
+                city_lng = city_info.get('longitude', 0.0)
+                if city_lat and city_lng:
+                    aggregated_request_counts[city_key] = calculate_aggregated_request_count(
+                        city_lat,
+                        city_lng,
+                        radius_miles,
+                        us_cities,
+                        city_request_counts
+                    )
+                else:
+                    aggregated_request_counts[city_key] = city_request_counts.get(city_key, 0)
+            
+            print(f"  Pre-calculated aggregated request counts for {len(aggregated_request_counts)} cities")
+        
+        # Step 11: Create coverage analysis for ALL US cities
         print(f"Creating coverage analysis for all {len(us_cities)} US cities...")
-        yield format_log(f"Creating coverage analysis for all {len(us_cities)} US cities...", 92)
+        yield format_log(f"Creating coverage analysis for all {len(us_cities)} US cities...", 95)
         coverage_analysis = []
         
         processed_cities = 0
         for city_key, city_info in us_cities.items():
             processed_cities += 1
             if processed_cities % 5000 == 0:
-                progress = 92 + int((processed_cities / len(us_cities)) * 6)  # 92-98% range
+                progress = 95 + int((processed_cities / len(us_cities)) * 3)  # 95-98% range
                 yield format_log(f"Analyzing city {processed_cities}/{len(us_cities)}...", progress)
             
             # Get warehouse data for this city if available
             warehouse_data = warehouse_city_data.get(city_key, {})
             warehouses_in_city = warehouse_data.get("warehouses", [])
-            # Use request counts from Requests table (where requests originated from)
-            # This matches the AI analysis endpoint logic
-            total_requests_in_city = city_request_counts.get(city_key, 0)
+            
+            # Get request count: use pre-calculated aggregated counts if available, otherwise use direct count
+            if aggregated_request_counts:
+                total_requests_in_city = aggregated_request_counts.get(city_key, 0)
+            else:
+                # Use request counts from Requests table (where requests originated from)
+                total_requests_in_city = city_request_counts.get(city_key, 0)
             
             # Count warehouses by tier
             gold_count = sum(1 for w in warehouses_in_city if w.tier in ["Gold", "Potential Gold"])
@@ -869,6 +1044,43 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
         
         print(f"  Radius expansion completed. Cities with warehouses after expansion: {len(warehouse_city_data)}")
     
+    # Pre-calculate aggregated request counts if radius expansion is enabled
+    aggregated_request_counts = {}
+    if radius_miles and radius_miles > 0:
+        print(f"Finding relevant cities for aggregated request counts (radius: {radius_miles} miles)...")
+        
+        # Get only relevant cities (cities with requests/warehouses + cities within radius)
+        relevant_cities = get_relevant_cities_for_aggregation(
+            radius_miles,
+            us_cities,
+            city_request_counts,
+            warehouse_city_data
+        )
+        
+        print(f"Pre-calculating aggregated request counts for {len(relevant_cities)} relevant cities...")
+        processed_agg = 0
+        total_cities_agg = len(relevant_cities)
+        for city_key in relevant_cities:
+            processed_agg += 1
+            if processed_agg % 1000 == 0:
+                print(f"  Pre-calculating aggregated counts: {processed_agg}/{total_cities_agg}...")
+            
+            city_info = us_cities.get(city_key, {})
+            city_lat = city_info.get('latitude', 0.0)
+            city_lng = city_info.get('longitude', 0.0)
+            if city_lat and city_lng:
+                aggregated_request_counts[city_key] = calculate_aggregated_request_count(
+                    city_lat,
+                    city_lng,
+                    radius_miles,
+                    us_cities,
+                    city_request_counts
+                )
+            else:
+                aggregated_request_counts[city_key] = city_request_counts.get(city_key, 0)
+        
+        print(f"  Pre-calculated aggregated request counts for {len(aggregated_request_counts)} cities")
+    
     # Create coverage analysis for ALL US cities
     print(f"Creating coverage analysis for all {len(us_cities)} US cities...")
     coverage_analysis = []
@@ -877,9 +1089,13 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
         # Get warehouse data for this city if available
         warehouse_data = warehouse_city_data.get(city_key, {})
         warehouses_in_city = warehouse_data.get("warehouses", [])
-        # Use request counts from Requests table (where requests originated from)
-        # This matches the AI analysis endpoint logic
-        total_requests_in_city = city_request_counts.get(city_key, 0)
+        
+        # Get request count: use pre-calculated aggregated counts if available, otherwise use direct count
+        if aggregated_request_counts:
+            total_requests_in_city = aggregated_request_counts.get(city_key, 0)
+        else:
+            # Use request counts from Requests table (where requests originated from)
+            total_requests_in_city = city_request_counts.get(city_key, 0)
         
         # Count warehouses by tier
         gold_count = sum(1 for w in warehouses_in_city if w.tier in ["Gold", "Potential Gold"])
@@ -1132,7 +1348,7 @@ async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, ski
         for warehouse in data["warehouses"]:
             unique_warehouse_ids.add(warehouse.id)
     
-    ai_analysis = await analyze_coverage_gaps_with_ai(city_warehouses_dict, total_requests, len(unique_warehouse_ids))
+    ai_analysis = await analyze_coverage_gaps_with_ai(city_warehouses_dict, total_requests, len(unique_warehouse_ids), radius_miles)
     print(f"AI analysis completed: {len(ai_analysis.coverageGaps)} gaps, {len(ai_analysis.recommendations)} recommendations")
     
     # Cache the result if no filters (for precache)
