@@ -14,6 +14,12 @@ PRECACHED_RADII = [25.0, 50.0, 100.0, 250.0, 500.0]
 # Cache key for last precache timestamp
 LAST_PRECACHE_TIMESTAMP_KEY = "coverage_gap:precache:last_timestamp"
 
+# Maximum number of retry attempts for failed radii
+MAX_RETRIES = 3
+
+# Base delay for exponential backoff (in seconds)
+RETRY_BASE_DELAY = 5
+
 def get_precache_key(radius: float) -> str:
     """Generate cache key for pre-cached results."""
     return f"coverage_gap:precached:radius_{radius}"
@@ -67,26 +73,58 @@ async def precache_coverage_gap_analysis(radius: float) -> bool:
 async def precache_all_radii() -> Dict[float, str]:
     """
     Pre-cache all configured radius values.
+    Includes automatic retry mechanism for failed radii with exponential backoff.
     Returns status for each radius.
     """
     print("[PRECACHE] ===== Starting pre-cache job =====")
     results = {}
     
+    # Initial attempt for all radii
     for radius in PRECACHED_RADII:
         success = await precache_coverage_gap_analysis(radius)
         results[radius] = "success" if success else "failed"
+    
+    # Retry mechanism for failed radii
+    retry_attempt = 0
+    while retry_attempt < MAX_RETRIES:
+        # Get list of failed radii
+        failed_radii = [radius for radius, status in results.items() if status == "failed"]
+        
+        if not failed_radii:
+            # All radii succeeded, break out of retry loop
+            break
+        
+        retry_attempt += 1
+        # Exponential backoff: 5s, 10s, 20s
+        retry_delay = RETRY_BASE_DELAY * (2 ** (retry_attempt - 1))
+        
+        print(f"[PRECACHE] ===== Retry attempt {retry_attempt}/{MAX_RETRIES} for {len(failed_radii)} failed radii =====")
+        print(f"[PRECACHE] Waiting {retry_delay} seconds before retry...")
+        await asyncio.sleep(retry_delay)
+        
+        # Retry each failed radius
+        for failed_radius in failed_radii:
+            print(f"[PRECACHE] Retrying pre-cache for radius: {failed_radius} miles")
+            success = await precache_coverage_gap_analysis(failed_radius)
+            results[failed_radius] = "success" if success else "failed"
+            
+            status_msg = "✓ Retry successful" if success else "✗ Retry failed"
+            print(f"[PRECACHE] {status_msg} for radius {failed_radius} miles")
     
     # Save timestamp after completion (even if some failed, we still record the run)
     save_last_precache_timestamp()
     
     print(f"[PRECACHE] ===== Pre-cache job completed =====")
     print(f"[PRECACHE] Results: {results}")
+    if retry_attempt > 0:
+        print(f"[PRECACHE] Used {retry_attempt} retry attempt(s)")
     
     return results
 
 async def precache_all_radii_stream() -> AsyncGenerator[str, None]:
     """
     Pre-cache all configured radius values with streaming progress updates via SSE.
+    Includes automatic retry mechanism for failed radii with exponential backoff.
     Yields progress messages and final results.
     """
     def format_log(message: str, progress: Optional[float] = None) -> str:
@@ -111,6 +149,7 @@ async def precache_all_radii_stream() -> AsyncGenerator[str, None]:
         results = {}
         total_radii = len(PRECACHED_RADII)
         
+        # Initial attempt for all radii
         for index, radius in enumerate(PRECACHED_RADII):
             # Calculate progress percentage
             progress = (index / total_radii) * 100
@@ -123,6 +162,38 @@ async def precache_all_radii_stream() -> AsyncGenerator[str, None]:
             
             status_msg = "✓ Successfully cached" if success else "✗ Failed to cache"
             yield format_log(f"{status_msg} radius {radius} miles", progress)
+        
+        # Retry mechanism for failed radii
+        retry_attempt = 0
+        while retry_attempt < MAX_RETRIES:
+            # Get list of failed radii
+            failed_radii = [radius for radius, status in results.items() if status == "failed"]
+            
+            if not failed_radii:
+                # All radii succeeded, break out of retry loop
+                break
+            
+            retry_attempt += 1
+            # Exponential backoff: 5s, 10s, 20s
+            retry_delay = RETRY_BASE_DELAY * (2 ** (retry_attempt - 1))
+            
+            yield format_log(f"Retrying {len(failed_radii)} failed radii (attempt {retry_attempt}/{MAX_RETRIES})...", 90)
+            print(f"[PRECACHE] ===== Retry attempt {retry_attempt}/{MAX_RETRIES} for {len(failed_radii)} failed radii =====")
+            
+            # Wait before retry with exponential backoff
+            yield format_log(f"Waiting {retry_delay} seconds before retry...", 90)
+            await asyncio.sleep(retry_delay)
+            
+            # Retry each failed radius
+            for failed_radius in failed_radii:
+                yield format_log(f"Retrying radius {failed_radius} miles...", 92)
+                print(f"[PRECACHE] Retrying pre-cache for radius: {failed_radius} miles")
+                
+                success = await precache_coverage_gap_analysis(failed_radius)
+                results[failed_radius] = "success" if success else "failed"
+                
+                status_msg = "✓ Retry successful" if success else "✗ Retry failed"
+                yield format_log(f"{status_msg} for radius {failed_radius} miles", 92)
         
         # Save timestamp after completion (even if some failed, we still record the run)
         timestamp = save_last_precache_timestamp()
@@ -143,7 +214,8 @@ async def precache_all_radii_stream() -> AsyncGenerator[str, None]:
                 "total": len(results),
                 "successful": success_count,
                 "failed": failed_count,
-                "radii": list(results.keys())
+                "radii": list(results.keys()),
+                "retriesUsed": retry_attempt if failed_count > 0 else 0
             },
             "lastPrecacheTimestamp": timestamp
         }
