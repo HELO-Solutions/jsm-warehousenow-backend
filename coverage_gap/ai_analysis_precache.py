@@ -2,6 +2,7 @@
 Pre-caching service for AI analysis.
 Automatically caches AI analysis results every 24 hours.
 """
+import asyncio
 import json
 from typing import AsyncGenerator, Optional
 from datetime import datetime, timezone
@@ -11,6 +12,11 @@ from warehouse.warehouse_service import _cache
 AI_ANALYSIS_PRECACHE_KEY = "coverage_gap:ai_analysis:precached"
 # Cache key for last AI analysis precache timestamp
 LAST_AI_ANALYSIS_PRECACHE_TIMESTAMP_KEY = "coverage_gap:ai_analysis:precache:last_timestamp"
+
+# Maximum number of retry attempts
+MAX_RETRIES = 3
+# Base delay for exponential backoff (in seconds)
+RETRY_BASE_DELAY = 5
 
 def save_last_ai_analysis_precache_timestamp() -> str:
     """
@@ -33,6 +39,35 @@ def get_last_ai_analysis_precache_timestamp() -> Optional[str]:
 async def precache_ai_analysis() -> bool:
     """
     Pre-cache AI analysis for no filters (most common case).
+    Includes automatic retry mechanism for failures with exponential backoff.
+    Returns True if successful, False otherwise.
+    """
+    # Initial attempt
+    success = await _precache_ai_analysis_once()
+    
+    # Retry mechanism if initial attempt failed
+    retry_attempt = 0
+    while not success and retry_attempt < MAX_RETRIES:
+        retry_attempt += 1
+        # Exponential backoff: 5s, 10s, 20s
+        retry_delay = RETRY_BASE_DELAY * (2 ** (retry_attempt - 1))
+        
+        print(f"[AI_ANALYSIS_PRECACHE] Retry attempt {retry_attempt}/{MAX_RETRIES}")
+        print(f"[AI_ANALYSIS_PRECACHE] Waiting {retry_delay} seconds before retry...")
+        await asyncio.sleep(retry_delay)
+        
+        success = await _precache_ai_analysis_once()
+    
+    if success:
+        print(f"[AI_ANALYSIS_PRECACHE] Completed successfully" + (f" after {retry_attempt} retry attempt(s)" if retry_attempt > 0 else ""))
+    else:
+        print(f"[AI_ANALYSIS_PRECACHE] Failed after {MAX_RETRIES} retry attempts")
+    
+    return success
+
+async def _precache_ai_analysis_once() -> bool:
+    """
+    Single attempt to pre-cache AI analysis.
     Returns True if successful, False otherwise.
     """
     try:
@@ -61,6 +96,7 @@ async def precache_ai_analysis() -> bool:
 async def precache_ai_analysis_stream() -> AsyncGenerator[str, None]:
     """
     Pre-cache AI analysis with streaming progress updates via SSE.
+    Includes automatic retry mechanism for failures with exponential backoff.
     Yields progress messages and final results.
     """
     def format_log(message: str, progress: Optional[float] = None) -> str:
@@ -82,8 +118,25 @@ async def precache_ai_analysis_stream() -> AsyncGenerator[str, None]:
         yield format_log("Starting AI analysis pre-cache job", 0)
         print("[AI_ANALYSIS_PRECACHE] ===== Starting AI analysis pre-cache job =====")
         
+        # Initial attempt
         yield format_log("Fetching fresh AI analysis data...", 25)
-        success = await precache_ai_analysis()
+        success = await _precache_ai_analysis_once()
+        
+        # Retry mechanism if initial attempt failed
+        retry_attempt = 0
+        while not success and retry_attempt < MAX_RETRIES:
+            retry_attempt += 1
+            # Exponential backoff: 5s, 10s, 20s
+            retry_delay = RETRY_BASE_DELAY * (2 ** (retry_attempt - 1))
+            
+            yield format_log(f"AI analysis pre-cache failed. Retrying (attempt {retry_attempt}/{MAX_RETRIES})...", 50)
+            print(f"[AI_ANALYSIS_PRECACHE] Retry attempt {retry_attempt}/{MAX_RETRIES}")
+            
+            yield format_log(f"Waiting {retry_delay} seconds before retry...", 60)
+            await asyncio.sleep(retry_delay)
+            
+            yield format_log(f"Retrying AI analysis pre-cache...", 70)
+            success = await _precache_ai_analysis_once()
         
         if success:
             timestamp = get_last_ai_analysis_precache_timestamp()
@@ -93,12 +146,13 @@ async def precache_ai_analysis_stream() -> AsyncGenerator[str, None]:
             final_data = {
                 "message": "AI analysis pre-cache job completed",
                 "status": "success",
+                "retriesUsed": retry_attempt,
                 "lastPrecacheTimestamp": timestamp
             }
             yield format_data(final_data)
         else:
-            yield format_log("AI analysis pre-cache failed", 100)
-            yield format_error("AI analysis pre-cache failed")
+            yield format_log(f"AI analysis pre-cache failed after {MAX_RETRIES} retries", 100)
+            yield format_error(f"AI analysis pre-cache failed after {MAX_RETRIES} retry attempts")
         
     except Exception as e:
         error_msg = str(e)
