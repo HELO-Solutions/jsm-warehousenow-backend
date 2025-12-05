@@ -21,9 +21,14 @@ COLUMN_WIDTHS = {
     "Notes": 15
 }
 
+def sanitize_table_value(value: str) -> str:
+    if not value:
+        return ""
+    value = str(value).replace("|", "│") 
+    return value
 
 def pad(value: str, width: int) -> str:
-    value = str(value) if value else ""
+    value = sanitize_table_value(value) if value else ""
     if len(value) > width - 1:
         value = value[:width-1]
     return value.ljust(width)
@@ -89,7 +94,7 @@ def build_combined_canvas_markdown(
     warehouses: List[ExportWarehouseData],
 ) -> str:
     """Build Markdown table with padded values for Slack Canvas."""
-    # Updated column order and widths
+
     COLUMN_WIDTHS_ORDERED = {
         "ID": 20,
         "Called?": 20,
@@ -112,7 +117,7 @@ def build_combined_canvas_markdown(
     # Check all warehouse data to find the maximum width needed
     for w in warehouses:
         f = w.fields
-        # Safely concatenate phone numbers, filtering out None values
+        # Concatenate phone numbers, filtering out None values
         phone_numbers = [
             f.office_phone,
             f.cell_phone,
@@ -233,8 +238,6 @@ def get_channel_data_by_request(request_id: str) -> ChannelData:
     headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
     target = str(request_id).lower() 
     
-    found_private_channel_without_bot = False
-    private_channel_name = None
     all_channels = []
     
     # Fetch public channels
