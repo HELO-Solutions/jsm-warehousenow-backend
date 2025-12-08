@@ -20,6 +20,7 @@ class AttachmentFile(BaseModel):
     
 class WarehouseFields(BaseModel):
     warehouse_name: Optional[str] = Field(None, alias="Warehouse Name")
+    auxiliary_location: Optional[bool] = Field(None, alias="Auxiliary Location")
     city: Optional[str] = None
     state: Optional[str] = None
     zip_code: Optional[str] = None
