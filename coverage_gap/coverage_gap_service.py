@@ -764,6 +764,10 @@ async def get_coverage_gap_analysis_stream(
             warehouse_data = warehouse_city_data.get(city_key, {})
             warehouses_in_city = warehouse_data.get("warehouses", [])
             
+            # If filters are applied, skip cities with no matching warehouses
+            if filters and len(warehouses_in_city) == 0:
+                continue
+            
             # Get request count: use pre-calculated aggregated counts if available, otherwise use direct count
             if aggregated_request_counts:
                 total_requests_in_city = aggregated_request_counts.get(city_key, 0)
@@ -844,7 +848,14 @@ async def get_coverage_gap_analysis_stream(
             ))
         
         # Step 11: Build final result
-        yield format_log("Finalizing results...", 98)
+        if filters:
+            yield format_log(f"Coverage analysis complete: {len(coverage_analysis)} cities with matching warehouses", 98)
+            print(f"Coverage analysis complete: {len(coverage_analysis)} cities with matching warehouses")
+        else:
+            yield format_log(f"Coverage analysis complete: {len(coverage_analysis)} total cities", 98)
+            print(f"Coverage analysis complete: {len(coverage_analysis)} total cities")
+        
+        yield format_log("Finalizing results...", 99)
         # Get last precache timestamp
         last_precache_timestamp = get_last_precache_timestamp()
         result = CoverageAnalysisResponse(
@@ -1090,6 +1101,10 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
         warehouse_data = warehouse_city_data.get(city_key, {})
         warehouses_in_city = warehouse_data.get("warehouses", [])
         
+        # If filters are applied, skip cities with no matching warehouses
+        if filters and len(warehouses_in_city) == 0:
+            continue
+        
         # Get request count: use pre-calculated aggregated counts if available, otherwise use direct count
         if aggregated_request_counts:
             total_requests_in_city = aggregated_request_counts.get(city_key, 0)
@@ -1169,6 +1184,12 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
             reqCount=total_requests_in_city
         ))
     
+    # Log the results
+    if filters:
+        print(f"Coverage analysis complete: {len(coverage_analysis)} cities with matching warehouses")
+    else:
+        print(f"Coverage analysis complete: {len(coverage_analysis)} total cities")
+    
     # Get last precache timestamp
     last_precache_timestamp = get_last_precache_timestamp()
     result = CoverageAnalysisResponse(
@@ -1189,7 +1210,7 @@ async def get_coverage_gap_analysis(filters: Optional[CoverageGapFilters] = None
 async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, skip_cache: bool = False) -> AIAnalysisData:
     """Get only AI analysis for coverage gaps.
     
-    Always applies 25-mile radius expansion after grouping by cities.
+    Always applies 50-mile radius expansion after grouping by cities.
     This ensures all sections (coverage gaps, high request areas, etc.) 
     use the expanded warehouse data.
     
@@ -1212,9 +1233,9 @@ async def get_ai_analysis_only(filters: Optional[CoverageGapFilters] = None, ski
     
     print("=== AI ANALYSIS STARTED ===")
     
-    # Always use 25 miles radius for AI analysis
-    radius_miles = 25.0
-    print(f"Using 25-mile radius expansion for AI analysis")
+    # Always use 50 miles radius for AI analysis
+    radius_miles = 50.0
+    print(f"Using 50-mile radius expansion for AI analysis")
     
     # Get all warehouses
     warehouses_data = await fetch_warehouses_from_airtable()
