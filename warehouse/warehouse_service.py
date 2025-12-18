@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from threading import Lock
 import copy
 from services.airtable.warehouses import fetch_warehouses_from_airtable
-from services.geolocation.geolocation_service import get_coordinates_mapbox, get_driving_distance_and_time_google, haversine
+from services.geolocation.geolocation_service import get_coordinates_google, get_driving_distance_and_time_google, haversine
 from warehouse.models import FilterWarehouseData, WarehouseData
 from services.gemini_services.ai_analysis import GENERAL_AI_ANALYSIS, analyze_warehouse_with_gemini
 
@@ -117,13 +117,14 @@ def find_missing_fields(fields: dict) -> List[str]:
     return missing
 
 async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
-    origin_coords = get_coordinates_mapbox(origin_zip)
+    origin_coords = get_coordinates_google(origin_zip)
     if not origin_coords:
         return {"origin_zip": origin_zip, "warehouses": [], "ai_analysis": GENERAL_AI_ANALYSIS, "error": "Invalid ZIP code"}
 
     warehouses: List[WarehouseData] = await fetch_warehouses_from_airtable()
-    
-    # Direct Haversine calculation using lat/lng from Airtable (no API calls!)
+
+
+    # Direct Haversine calculation using lat/lng from Airtable
     haversine_filtered_warehouses = []
     warehouses_with_coords = 0
     warehouses_without_coords = 0
@@ -131,25 +132,27 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
     for wh in warehouses:
         lat = wh["fields"].get("Latitude")
         lng = wh["fields"].get("Longitude")
-        
-        if lat and lng:
-            warehouses_with_coords += 1
-            # Direct Haversine calculation (no API calls!)
-            straight_line_miles = haversine(
-                origin_coords[0], origin_coords[1],
-                float(lat), float(lng)
-            )
-            
-            # Use 2x buffer for Haversine pre-filtering
-            if straight_line_miles <= radius_miles * 2:
-                haversine_filtered_warehouses.append({
-                    'warehouse': wh,
-                    'coordinates': (float(lat), float(lng)),
-                    'zip': wh["fields"].get("ZIP"),
-                    'haversine_distance': straight_line_miles
-                })
-        else:
-            warehouses_without_coords += 1
+        auxiliary_location = wh["fields"].get("Auxiliary Location")
+
+        if auxiliary_location != True:
+            if lat and lng:
+                warehouses_with_coords += 1
+                # Direct Haversine calculation (no API calls!)
+                straight_line_miles = haversine(
+                    origin_coords[0], origin_coords[1],
+                    float(lat), float(lng)
+                )
+                
+                # Use 2x buffer for Haversine pre-filtering
+                if straight_line_miles <= radius_miles * 2:
+                    haversine_filtered_warehouses.append({
+                        'warehouse': wh,
+                        'coordinates': (float(lat), float(lng)),
+                        'zip': wh["fields"].get("ZIP"),
+                        'haversine_distance': straight_line_miles
+                    })
+            else:
+                warehouses_without_coords += 1
 
     
     if not haversine_filtered_warehouses:
@@ -162,7 +165,6 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
         wh_coords = item['coordinates']
         wh_zip = item['zip']
         
-        # No need for additional haversine filtering - already filtered above
         candidate_warehouses.append({
             'warehouse': wh,
             'coordinates': wh_coords,
@@ -222,4 +224,5 @@ async def find_nearby_warehouses(origin_zip: str, radius_miles: float):
     except Exception:
         ai_analysis = GENERAL_AI_ANALYSIS
 
+        
     return {"origin_zip": origin_zip, "warehouses": nearby, "ai_analysis": ai_analysis}

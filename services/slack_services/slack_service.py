@@ -168,9 +168,9 @@ def build_combined_canvas_markdown(
 
     return "\n".join(rows)
 
-def create_slack_canvas(channel_id: str, markdown_content: str, zip_searched: str, radius: str):
+def create_slack_canvas(channel_id: str, markdown_content: str, title: str):
     payload = {
-        "title": f"Search Results - Zip: {zip_searched}, Radius: {radius} miles\n\n",
+        "title": title,
         "channel_id": channel_id,
         "document_content": {"type": "markdown", "markdown": markdown_content}
     }
@@ -203,13 +203,12 @@ def split_markdown(markdown: str, max_size: int = MAX_CHUNK_SIZE):
     return chunks
 
 
-def append_to_slack_canvas(canvas_file_id: str, new_markdown: str, zip_searched: str, radius: str):
+def append_to_slack_canvas(canvas_file_id: str, new_markdown: str, title: str):
     headers = {
         "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
         "Content-Type": "application/json; charset=utf-8"
     }
 
-    title = f"## Search Results - Zip: {zip_searched}, Radius: {radius} miles\n\n"
     full_content =  title + new_markdown
 
     # Use insert_at_end operation to append without fetching existing content
@@ -231,7 +230,7 @@ def append_to_slack_canvas(canvas_file_id: str, new_markdown: str, zip_searched:
     if not data.get("ok"):
         raise Exception(f"Slack Canvas update error: {data}")
 
-    return {"ok": True, "message": "Canvas updated successfully."}
+    return {"ok": True, title:title, "message": "Canvas updated successfully."}
 
 
 def get_channel_data_by_request(request_id: str) -> ChannelData:
@@ -357,7 +356,8 @@ async def export_warehouse_results_to_slack(
     warehouses: List[ExportWarehouseData],
     zip_searched: str,
     radius: str,
-    request_id: str
+    request_id: str,
+    export_only: bool
 ):
     channel_data: ChannelData = get_channel_data_by_request(request_id)
     if not channel_data:
@@ -376,12 +376,16 @@ async def export_warehouse_results_to_slack(
         warehouses=warehouses,
     )
 
+    if export_only:
+        title = f"## Search Results - Exported - Zip: {zip_searched}, Radius: {radius} miles\n\n"
+    else: 
+        title = f"## Search Results - Contacted & Exported - Zip: {zip_searched}, Radius: {radius} miles\n\n"
+
     if canvas_id and file_id:
         append_to_slack_canvas(
             file_id, 
             new_table_markdown,
-            zip_searched,
-            radius
+            title
             )
         message = f"*New warehouse search results added to Canvas.!*\n• Zip Code: {zip_searched}\n• Radius: {radius} miles\n Please review the records."
         post_message_to_channel(channel_id, message, file_id)
@@ -389,8 +393,7 @@ async def export_warehouse_results_to_slack(
         canvas_id = create_slack_canvas(
             channel_id,
             new_table_markdown,
-            zip_searched,
-            radius
+            title
         )
         message = f"*New warehouse search results added to Canvas.!*\n• Zip Code: {zip_searched}\n• Radius: {radius} miles\n Please review the updated records."
         post_message_to_channel(channel_id, message, canvas_id)

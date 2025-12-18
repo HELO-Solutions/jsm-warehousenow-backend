@@ -62,13 +62,14 @@ async def find_nearby_warehouses_endpoint(request: LocationRequest):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @warehouse_router.post("/search/export")
-async def export_search_to_slack(warehouses: List[ExportWarehouseData], zip: str, radius: str, request_id: str):
+async def export_search_to_slack(warehouses: List[ExportWarehouseData], zip: str, radius: str, request_id: str, export_only: bool):
     try:
         canvas_id = await export_warehouse_results_to_slack(
             warehouses=warehouses,
             zip_searched=zip,
             radius=radius,
-            request_id=request_id
+            request_id=request_id,
+            export_only=export_only
         )
         return ResponseModel(status="success", data=canvas_id)
 
