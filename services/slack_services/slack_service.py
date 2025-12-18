@@ -377,7 +377,7 @@ async def export_warehouse_results_to_slack(
     )
 
     if export_only:
-        title = f"## Search Results - Exported - Zip: {zip_searched}, Radius: {radius} miles\n\n"
+        title = f"## Search Results - Exported Only - Zip: {zip_searched}, Radius: {radius} miles\n\n"
     else: 
         title = f"## Search Results - Contacted & Exported - Zip: {zip_searched}, Radius: {radius} miles\n\n"
 
